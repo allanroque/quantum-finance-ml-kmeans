@@ -1,0 +1,56 @@
+#%% md
+## Ambiente
+
+Bibliotecas e versões usadas. O Google Colab já traz todas instaladas.
+
+#%% code
+import hashlib
+import importlib.metadata as metadata
+import io
+import json
+import platform
+import shutil
+import time
+import urllib.request
+import warnings
+import zipfile
+from pathlib import Path
+
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from IPython.display import display
+from matplotlib.patches import FancyBboxPatch
+from scipy.optimize import linear_sum_assignment
+from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
+from sklearn.compose import ColumnTransformer
+from sklearn.datasets import make_blobs
+from sklearn.metrics import adjusted_rand_score, davies_bouldin_score, silhouette_score
+from sklearn.mixture import GaussianMixture
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
+
+warnings.filterwarnings("ignore")
+SEED = 42
+
+# Aparência dos gráficos: grade discreta, texto em tons de tinta, uma cor fixa por segmento.
+TINTA, TINTA_2, GRADE, FUNDO, CINZA = "#0b0b0b", "#52514e", "#e6e5e1", "#fcfcfb", "#c9c8c3"
+AZUL, LARANJA, VERDE, AMARELO, ROSA = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"
+CORES = [AZUL, LARANJA, VERDE, AMARELO, ROSA]
+plt.rcParams.update({
+    "figure.facecolor": FUNDO, "axes.facecolor": FUNDO, "savefig.facecolor": FUNDO,
+    "axes.edgecolor": GRADE, "axes.labelcolor": TINTA_2, "text.color": TINTA,
+    "xtick.color": TINTA_2, "ytick.color": TINTA_2, "axes.grid": True,
+    "grid.color": GRADE, "grid.linewidth": 0.8, "axes.axisbelow": True,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "axes.titleweight": "bold", "axes.titlesize": 11, "axes.titlelocation": "left",
+    "font.size": 10, "figure.dpi": 110, "lines.linewidth": 2, "legend.frameon": False,
+})
+pd.set_option("display.max_columns", 30)
+pd.set_option("display.width", 200)
+pd.set_option("display.max_colwidth", 120)
+
+print("Python", platform.python_version())
+display(pd.Series({p: metadata.version(p) for p in ["numpy", "pandas", "scikit-learn", "matplotlib", "scipy"]},
+                  name="versão").to_frame())

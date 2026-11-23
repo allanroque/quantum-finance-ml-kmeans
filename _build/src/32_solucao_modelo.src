@@ -1,0 +1,347 @@
+#%% md
+## 3.6 Variáveis por cliente
+
+Passamos de uma linha por item de pedido para **uma linha por cliente**. As quatro variáveis que entram na distância cobrem as duas dimensões do recorte.
+
+| Variável | Definição, na janela de 12 meses | Dimensão |
+|---|---|---|
+| `recencia` | dias entre a última compra e o fim da janela | valor: o cliente ainda está ativo? |
+| `frequencia` | número de pedidos de compra distintos | valor: com que intensidade compra? |
+| `ticket_medio` | valor médio por pedido de compra, em libras | valor: quanto gasta por vez? |
+| `estornos_por_pedido` | faturas de estorno ÷ pedidos de compra, limitada a 1 | custo de servir: com que frequência gera retrabalho? |
+
+**Cuidado: o que a quarta variável mede.** É uma razão entre duas contagens: quantas faturas de estorno o cliente teve para cada pedido de compra. Lemos como "estornos por pedido". Não é exatamente a parcela de pedidos estornados, porque uma fatura de estorno pode se referir a um pedido anterior à janela ou a parte de um pedido. O limite em 1 evita que esses casos distorçam a escala.
+
+Outras colunas são calculadas apenas como **contexto** para descrever os segmentos depois. Elas não entram na distância: `valor_liquido`, `valor_estornado`, `n_estornos`, `tempo_casa` e `pais`.
+
+**Decisão: o valor total fica de fora da distância.** O valor comprado é o produto de duas variáveis que já estão no modelo: valor = frequência × ticket médio. Depois do logaritmo, isso vira uma soma: log(valor) = log(frequência) + log(ticket). Incluí-lo seria contar a mesma informação duas vezes e dar peso dobrado ao lado da receita.
+
+**Cuidado: tempo de casa.** Quem fez a primeira compra no fim da janela teve menos tempo para acumular pedidos e parece menos frequente do que é. A Aula 3 apontou esse limite. Aqui o tempo de casa é reportado por segmento, para que a leitura dos perfis leve isso em conta. Ele é medido dentro da janela: não distingue um cliente novo de um cliente antigo que só voltou a comprar no fim do período. Se a {{EMPRESA}} tiver a data de cadastro, clientes novos podem ser tratados em uma régua própria.
+
+#%% code
+VARIAVEIS = ["recencia", "frequencia", "ticket_medio", "estornos_por_pedido"]
+
+def variaveis_por_cliente(t, inicio, fim):
+    """Uma linha por cliente com compra na janela [inicio, fim)."""
+    w = t[(t["data"] >= inicio) & (t["data"] < fim)]
+    compras_w, estornos_w = w[~w["estorno"]], w[w["estorno"]]
+    pedidos = (compras_w.groupby(["cliente", "pedido"])
+               .agg(data=("data", "min"), valor=("valor", "sum")).reset_index())
+    f = pedidos.groupby("cliente").agg(frequencia=("pedido", "size"), ticket_medio=("valor", "mean"),
+                                       valor_bruto=("valor", "sum"), ultima=("data", "max"), primeira=("data", "min"))
+    f["recencia"] = (fim - f["ultima"]).dt.days
+    f["tempo_casa"] = (fim - f["primeira"]).dt.days
+    f["n_estornos"] = estornos_w.groupby("cliente")["pedido"].nunique().reindex(f.index).fillna(0).astype(int)
+    f["valor_estornado"] = (-estornos_w.groupby("cliente")["valor"].sum()).reindex(f.index).fillna(0.0)
+    f["estornos_por_pedido"] = (f["n_estornos"] / f["frequencia"]).clip(upper=1.0)
+    f["valor_liquido"] = f["valor_bruto"] - f["valor_estornado"]
+    f["pais"] = compras_w.groupby("cliente")["pais"].agg(lambda s: s.mode().iat[0])
+    return f.drop(columns=["ultima", "primeira"])
+
+ano1 = variaveis_por_cliente(t, INICIO_OBS, FIM_OBS)
+assert ano1[VARIAVEIS].notna().all().all() and (ano1[["frequencia", "ticket_medio"]] > 0).all().all()
+print(f"Clientes na janela de observação: {milhar(len(ano1))}")
+display(ano1.head())
+display(ano1[VARIAVEIS + ["valor_liquido", "tempo_casa"]].describe(percentiles=[.5, .9, .99]).T.round(2))
+print(f"Clientes com um único pedido: {(ano1['frequencia'] == 1).mean():.1%} · sem nenhum estorno: {(ano1['n_estornos'] == 0).mean():.1%}")
+
+#%% md
+**Evidência.** As quatro variáveis são muito assimétricas. A frequência tem mediana 2 e máximo 175; o ticket médio tem mediana de £ 290 e máximo perto de £ 12 mil; 62% dos clientes não têm nenhum estorno. Um terço dos clientes fez um único pedido no ano. Uma distância calculada sobre esses números crus seria dominada por meia dúzia de clientes extremos, e é isso que a próxima seção trata.
+
+## 3.7 Preparação da distância
+
+O K-means agrupa por distância. Duas coisas distorcem a distância e precisam ser corrigidas antes do treino.
+
+**Assimetria.** A diferença entre 1 e 2 pedidos é tão relevante para o negócio quanto a diferença entre 50 e 100. Em escala crua, a segunda pesa 50 vezes mais. O logaritmo faz a distância enxergar proporções: dobrar vale o mesmo em qualquer faixa.
+
+**Escala.** O ticket é medido em centenas de libras, e os estornos por pedido vão de 0 a 1. Sem padronizar, o ticket decidiria tudo sozinho. É o mesmo cuidado visto com o KNN na Aula 2.
+
+| Variável | Transformação | Por quê |
+|---|---|---|
+| `frequencia`, `ticket_medio` | logaritmo | são estritamente positivas e crescem por proporção |
+| `recencia` | log(1 + x) | pode ser zero (compra no último dia da janela) |
+| `estornos_por_pedido` | raiz quadrada | fica entre 0 e 1 e tem muitos zeros, onde o logaritmo não existe; a raiz abre a região perto de zero e mantém 0 e 1 no lugar |
+| todas | padronização (média 0, desvio 1) | nenhuma variável domina a distância só por causa da unidade |
+
+O preparo é um objeto único (`Pipeline`), ajustado no ano 1. Em produção, o cliente novo passa exatamente pela mesma transformação, com os mesmos parâmetros.
+
+#%% code
+def criar_preparo():
+    return Pipeline([
+        ("transformacao", ColumnTransformer([
+            ("log1p", FunctionTransformer(np.log1p, inverse_func=np.expm1), ["recencia"]),
+            ("log", FunctionTransformer(np.log, inverse_func=np.exp), ["frequencia", "ticket_medio"]),
+            ("raiz", FunctionTransformer(np.sqrt, inverse_func=np.square), ["estornos_por_pedido"]),
+        ])),
+        ("escala", StandardScaler()),
+    ])
+
+def para_unidades_de_negocio(pontos_z, preparo):
+    """Converte pontos do espaço de treino (padronizado) de volta para as unidades originais."""
+    x = preparo.named_steps["escala"].inverse_transform(pontos_z)
+    return pd.DataFrame({"recencia": np.expm1(x[:, 0]), "frequencia": np.exp(x[:, 1]),
+                         "ticket_medio": np.exp(x[:, 2]), "estornos_por_pedido": np.square(np.clip(x[:, 3], 0, None))})
+
+preparo = criar_preparo()
+Z = preparo.fit_transform(ano1[VARIAVEIS])
+assert Z.shape == (len(ano1), len(VARIAVEIS)) and np.isfinite(Z).all()
+
+fig, eixos = plt.subplots(2, 4, figsize=(13, 5))
+for j, v in enumerate(VARIAVEIS):
+    eixos[0, j].hist(ano1[v], bins=40, color=CINZA)
+    eixos[0, j].set_title(f"{v}\noriginal · assimetria {ano1[v].skew():.1f}", fontsize=9.5)
+    eixos[1, j].hist(Z[:, j], bins=40, color=AZUL)
+    eixos[1, j].set_title(f"preparada · assimetria {pd.Series(Z[:, j]).skew():.1f}", fontsize=9.5)
+eixos[0, 0].set_ylabel("clientes"); eixos[1, 0].set_ylabel("clientes")
+fig.suptitle("Cada variável antes e depois do preparo", x=0.01, ha="left", fontweight="bold")
+plt.tight_layout(); plt.show()
+
+#%% md
+**Cuidado.** A variável de estorno continua com um pico em zero depois da raiz: 62% dos clientes não estornaram nada, e nenhuma transformação desfaz isso. Na prática, essa variável separa quem estorna de quem não estorna e gradua a intensidade entre os primeiros.
+
+O preparo não é um detalhe. A célula abaixo treina o mesmo K-means, com o mesmo número de grupos, em três versões dos dados.
+
+#%% code
+X_cru = ano1[VARIAVEIS].to_numpy(dtype=float)
+versoes = {"sem preparo": X_cru, "só padronização": StandardScaler().fit_transform(X_cru), "log e raiz + padronização": Z}
+linhas = []
+for nome, M in versoes.items():
+    tamanhos = np.sort(np.bincount(KMeans(n_clusters=5, n_init=20, random_state=SEED).fit_predict(M)))[::-1]
+    linhas.append({"preparo": nome, "tamanho dos 5 grupos": " · ".join(f"{v:,}" for v in tamanhos),
+                   "menor grupo (% dos clientes)": round(100 * tamanhos[-1] / len(M), 1)})
+efeito_preparo = pd.DataFrame(linhas).set_index("preparo")
+display(efeito_preparo)
+
+#%% md
+**Evidência.** Sem preparo, o K-means gasta dois dos cinco grupos para isolar algumas dezenas de clientes extremos e coloca 70% da base em um grupo só. Só padronizar não resolve, porque a assimetria continua. Com logaritmo, raiz e padronização, os grupos ficam de tamanho comparável.
+
+**Cuidado.** A Aula 3 alertou que as falhas de um modelo vêm das hipóteses violadas. O K-means supõe grupos compactos em torno de um centro; dados crus de consumo não têm essa forma. O preparo é o que aproxima os dados da hipótese.
+
+## 3.8 Escolha do número de segmentos
+
+O K-means devolve quantos grupos pedirmos. Comparamos *k* de 2 a 8 por cinco medidas, todas calculadas no ano 1.
+
+| Medida | O que diz | Leitura |
+|---|---|---|
+| **Inércia** | soma das distâncias quadráticas aos centros | sempre cai com *k*; procura-se onde a queda perde força |
+| **Silhouette** | coesão dentro do grupo contra separação entre grupos | de −1 a 1; maior é melhor |
+| **Davies-Bouldin** | dispersão interna dividida pela distância entre centros | menor é melhor |
+| **Menor grupo** | parcela dos clientes no menor segmento | grupo minúsculo não sustenta uma política |
+| **ARI entre execuções** | concordância entre duas partições, sem depender da numeração dos grupos | 1 = idênticas; perto de 0 = acaso |
+
+O ARI é medido de duas formas. Trocando a **semente**, mede a sensibilidade à inicialização, como na Aula 3. **Reamostrando** os clientes com reposição e reajustando o modelo, mede algo mais exigente: se os segmentos dependem de quais clientes estavam na base.
+
+**Cuidado.** Nenhuma dessas medidas é acurácia. Não há rótulo para acertar. Elas descrevem a geometria da partição, não a sua utilidade para o negócio.
+
+#%% code
+def ari_por_reamostragem(Z, rotulos_ref, k, n_reamostras=10, seed=SEED):
+    """Reamostra os clientes, reajusta o K-means e compara com a partição de referência."""
+    rng = np.random.default_rng(seed)
+    aris = []
+    for b in range(n_reamostras):
+        idx = rng.choice(len(Z), size=len(Z), replace=True)
+        modelo_b = KMeans(n_clusters=k, n_init=10, random_state=b).fit(Z[idx])
+        aris.append(adjusted_rand_score(rotulos_ref, modelo_b.predict(Z)))
+    return float(np.mean(aris)), float(np.min(aris))
+
+def diagnostico_k(Z, valores=range(2, 9)):
+    linhas = []
+    for k in valores:
+        km = KMeans(n_clusters=k, n_init=20, random_state=SEED).fit(Z)
+        rotulos = km.labels_
+        ari_sementes = min(adjusted_rand_score(rotulos, KMeans(n_clusters=k, n_init=20, random_state=s).fit_predict(Z))
+                           for s in (7, 21, 84))
+        ari_media, ari_minimo = ari_por_reamostragem(Z, rotulos, k)
+        linhas.append({"k": k, "inércia": km.inertia_, "silhouette": silhouette_score(Z, rotulos),
+                       "Davies-Bouldin": davies_bouldin_score(Z, rotulos),
+                       "menor grupo (%)": 100 * np.bincount(rotulos).min() / len(Z),
+                       "ARI sementes (mín.)": ari_sementes, "ARI reamostragem (média)": ari_media,
+                       "ARI reamostragem (mín.)": ari_minimo})
+    return pd.DataFrame(linhas).set_index("k")
+
+diag = diagnostico_k(Z)
+display(diag.round(3))
+grupos_k3 = np.bincount(KMeans(n_clusters=3, n_init=20, random_state=SEED).fit_predict(Z)) / len(Z)
+print("Com k = 3, parcela dos clientes em cada grupo:", " · ".join(f"{v:.0%}" for v in np.sort(grupos_k3)[::-1]))
+
+K = 5
+fig, eixos = plt.subplots(1, 4, figsize=(13.5, 3.4))
+for ax, coluna in zip(eixos, ["inércia", "silhouette", "Davies-Bouldin", "ARI reamostragem (média)"]):
+    ax.plot(diag.index, diag[coluna], marker="o", ms=5, color=AZUL)
+    ax.scatter([K], [diag.loc[K, coluna]], s=90, facecolor="none", edgecolor=TINTA, linewidth=1.6, zorder=3)
+    ax.set_title(coluna); ax.set_xlabel("k"); ax.set_xticks(list(diag.index))
+fig.suptitle("Diagnóstico por número de segmentos (círculo: k adotado)", x=0.01, ha="left", fontweight="bold")
+plt.tight_layout(); plt.show()
+
+#%% md
+**Evidência.**
+
+* A inércia cai de forma suave, sem um cotovelo nítido. Sozinha, ela não decide.
+* A silhouette é mais alta em *k* = 2 e *k* = 3. Depois cai em *k* = 4, tem uma leve recuperação em *k* = 5 (de 0,262 para 0,266) e cai de novo.
+* O Davies-Bouldin tem o seu menor valor em *k* = 5.
+* A estabilidade por reamostragem é alta em *k* = 2, 3 e 5 (acima de 0,9) e claramente menor em *k* = 4 e de 6 em diante.
+* Até *k* = 6, o menor grupo tem pelo menos 10% dos clientes. Nenhuma solução nessa faixa é degenerada.
+
+**Decisão: *k* = 5.**
+
+* *k* = 3 vence na silhouette, mas é agregado demais para orientar ações. Ele coloca metade da base (51%) em um grupo só, misturando o cliente recente, o ocasional de ticket alto e o inativo, que pedem tratamentos diferentes.
+* Entre as soluções mais finas, o que decide é a estabilidade: *k* = 5 fica acima de 0,9 e as vizinhas *k* = 4 e *k* = 6 mudam com a amostra. Silhouette e Davies-Bouldin apontam na mesma direção, por margem pequena.
+* Cinco perfis é um número que três áreas conseguem operar e lembrar.
+
+Não escolhemos o *k* de maior silhouette. A Aula 3 foi explícita: silhouette alta não garante utilidade comercial, e uma escolha justificada vale mais que um indicador alto.
+
+### Sensibilidade: e se as variáveis fossem outras?
+
+Antes de fixar o modelo, conferimos se a quarta variável ajuda e se a forma de medi-la importa. Três versões, todas com *k* = 5 e avaliadas só no ano 1:
+
+* **três variáveis**, sem estorno (o RFM clássico com ticket no lugar do valor);
+* **estorno por valor**: valor estornado ÷ valor comprado;
+* **estorno por frequência**: a versão adotada.
+
+#%% code
+taxa_valor = (ano1["valor_estornado"] / ano1["valor_bruto"]).clip(0, 1)
+z_taxa_valor = StandardScaler().fit_transform(np.sqrt(taxa_valor).to_numpy().reshape(-1, 1))
+variantes = {"3 variáveis (sem estorno)": Z[:, :3],
+             "4 variáveis, estorno por valor": np.hstack([Z[:, :3], z_taxa_valor]),
+             "4 variáveis, estorno por frequência (adotada)": Z}
+linhas = []
+for nome, M in variantes.items():
+    rot = KMeans(n_clusters=K, n_init=20, random_state=SEED).fit_predict(M)
+    linhas.append({"versão": nome, "silhouette": silhouette_score(M, rot),
+                   "menor grupo (%)": 100 * np.bincount(rot).min() / len(M),
+                   "ARI reamostragem (média)": ari_por_reamostragem(M, rot, K)[0]})
+sensibilidade = pd.DataFrame(linhas).set_index("versão")
+display(sensibilidade.round(3))
+
+#%% md
+**Evidência.** A versão adotada tem os grupos mais equilibrados e a partição mais estável (0,97, contra 0,87 sem a variável e 0,90 com o estorno medido por valor). Medir o estorno por valor produz um grupo com menos de 8% dos clientes, porque o valor estornado é dominado por poucos clientes (Seção 3.5). A silhouette também favorece a versão adotada, mas é calculada em espaços com variáveis diferentes e não é diretamente comparável entre as linhas.
+
+## 3.9 Modelo final e perfis dos segmentos
+
+Treinamos o modelo final com *k* = 5 e 20 inicializações do tipo k-means++, o padrão do scikit-learn, ficando com a de menor inércia. Os grupos saem do K-means numerados em ordem arbitrária, que pode mudar entre execuções. Para que o texto não dependa dessa numeração, cada grupo recebe uma letra por uma regra fixa aplicada aos centros.
+
+#%% code
+SEGMENTOS = {"A": "Frequentes e recentes", "B": "Recentes sem estorno", "C": "Estorno recorrente",
+             "D": "Ocasionais de ticket alto", "E": "Inativos de ticket baixo"}
+COR_SEG = dict(zip(SEGMENTOS, CORES))
+
+def letras_dos_grupos(centros):
+    """Regra fixa: do centro de cada grupo (em unidades de negócio) para a letra do segmento."""
+    assert len(centros) == 5, "a regra de nomes foi escrita para k = 5"
+    livres, letra = list(centros.index), {}
+    for codigo, coluna, escolher in [("C", "estornos_por_pedido", "idxmax"), ("A", "frequencia", "idxmax"),
+                                    ("B", "recencia", "idxmin"), ("D", "ticket_medio", "idxmax")]:
+        grupo = getattr(centros.loc[livres, coluna], escolher)()
+        letra[grupo] = codigo
+        livres.remove(grupo)
+    letra[livres[0]] = "E"
+    return letra
+
+modelo = KMeans(n_clusters=K, n_init=20, random_state=SEED).fit(Z)
+centros = para_unidades_de_negocio(modelo.cluster_centers_, preparo)
+LETRA = letras_dos_grupos(centros)
+ano1["segmento"] = pd.Series(modelo.labels_, index=ano1.index).map(LETRA)
+centros.index = [LETRA[g] for g in centros.index]
+centros = centros.loc[list(SEGMENTOS)]
+print(f"Convergiu em {modelo.n_iter_} iterações · inércia {milhar(modelo.inertia_)}")
+print("Centros convertidos para as unidades de negócio:")
+display(centros.round(2))
+
+#%% md
+**Cuidado.** Os centros acima foram convertidos de volta do espaço de treino (logaritmo, raiz, padronização). Eles são pontos de referência, **não médias aritméticas** dos clientes do grupo. Para descrever cada segmento, a tabela abaixo usa medianas e proporções observadas.
+
+#%% code
+def perfil_dos_segmentos(f):
+    g = f.groupby("segmento")
+    p = pd.DataFrame({
+        "nome": pd.Series(SEGMENTOS),
+        "clientes": g.size(),
+        "% dos clientes": 100 * g.size() / len(f),
+        "recência (mediana, dias)": g["recencia"].median(),
+        "frequência (mediana)": g["frequencia"].median(),
+        "ticket médio (mediana, £)": g["ticket_medio"].median(),
+        "com algum estorno (%)": 100 * g["n_estornos"].apply(lambda s: (s > 0).mean()),
+        "estornos por 100 pedidos (média)": 100 * g["estornos_por_pedido"].mean(),
+        "tempo de casa (mediana, dias)": g["tempo_casa"].median(),
+        "% da receita líquida": 100 * g["valor_liquido"].sum() / f["valor_liquido"].sum(),
+        "% do valor estornado": 100 * g["valor_estornado"].sum() / f["valor_estornado"].sum(),
+        "% das faturas de estorno": 100 * g["n_estornos"].sum() / f["n_estornos"].sum(),
+    })
+    return p.loc[list(SEGMENTOS)]
+
+perfil = perfil_dos_segmentos(ano1)
+display(perfil.round(1))
+
+#%% md
+Na figura abaixo, à esquerda, a cor mostra quanto o centro de cada segmento se afasta da média dos clientes (vermelho acima, azul abaixo, cinza na média) e o número é o centro na unidade de negócio. À direita, o peso de cada segmento na base, na receita e nas faturas de estorno.
+
+#%% code
+from matplotlib.colors import LinearSegmentedColormap
+
+rotulos_var = ["recência (dias)", "frequência (pedidos)", "ticket médio (£)", "estornos por pedido"]
+centros_z = pd.DataFrame(modelo.cluster_centers_, index=[LETRA[g] for g in range(K)]).loc[list(SEGMENTOS)]
+divergente = LinearSegmentedColormap.from_list("azul_cinza_vermelho", [AZUL, "#f0efec", "#e34948"])
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 4.2), gridspec_kw={"width_ratios": [1.15, 1]})
+ax1.imshow(centros_z.values, cmap=divergente, vmin=-2, vmax=2, aspect="auto")
+ax1.set_xticks(range(4), rotulos_var); ax1.set_yticks(range(K), [f"{s} · {SEGMENTOS[s]}" for s in SEGMENTOS])
+ax1.grid(False)
+formato = ["{:.0f}", "{:.1f}", "{:.0f}", "{:.2f}"]
+for i, s in enumerate(SEGMENTOS):
+    for j, v in enumerate(VARIAVEIS):
+        ax1.text(j, i, formato[j].format(centros.loc[s, v]), ha="center", va="center", fontsize=10,
+                 color="#ffffff" if abs(centros_z.values[i, j]) > 1.3 else TINTA)
+ax1.set_title("Centro de cada segmento", fontsize=10)
+
+medidas = ["% dos clientes", "% da receita líquida", "% das faturas de estorno"]
+altura = 0.26
+for m, (medida, cor) in enumerate(zip(medidas, [AZUL, LARANJA, VERDE])):
+    posicoes = np.arange(K) + (m - 1) * altura
+    barras = ax2.barh(posicoes, perfil[medida], height=altura - 0.03, color=cor, label=medida)
+    for y, v in zip(posicoes, perfil[medida]):
+        ax2.text(v + 0.8, y, f"{v:.0f}", va="center", fontsize=8.5, color=TINTA_2)
+ax2.set_yticks(range(K), list(SEGMENTOS)); ax2.invert_yaxis(); ax2.grid(axis="y", visible=False)
+ax2.set_xlabel("%"); ax2.set_title("Peso de cada segmento (%)", fontsize=10)
+ax2.legend(loc="lower right", fontsize=8.5)
+plt.tight_layout(); plt.show()
+
+#%% md
+Os gráficos abaixo mostram os clientes nas próprias variáveis do modelo, sem projeção. Cada coluna destaca um segmento sobre a nuvem de todos os clientes, em cinza. Na linha de cima, frequência contra ticket médio; na de baixo, recência contra estornos por pedido. Os pontos têm um pequeno deslocamento aleatório para que clientes com valores iguais não fiquem empilhados.
+
+#%% code
+rng_fig = np.random.default_rng(SEED)
+freq_j = ano1["frequencia"] * 10 ** rng_fig.uniform(-0.05, 0.05, len(ano1))
+prop_j = ano1["estornos_por_pedido"] + rng_fig.uniform(-0.02, 0.02, len(ano1))
+rec_j = ano1["recencia"] + rng_fig.uniform(-1.5, 1.5, len(ano1))
+
+fig, eixos = plt.subplots(2, K, figsize=(14, 5.8), sharex="row", sharey="row")
+for j, s in enumerate(SEGMENTOS):
+    m = (ano1["segmento"] == s).to_numpy()
+    for i, (x, y) in enumerate([(freq_j, ano1["ticket_medio"]), (rec_j, prop_j)]):
+        ax = eixos[i, j]
+        ax.scatter(x[~m], y[~m], s=4, color=CINZA, alpha=0.35, linewidths=0, rasterized=True)
+        ax.scatter(x[m], y[m], s=6, color=COR_SEG[s], alpha=0.65, linewidths=0, rasterized=True)
+    eixos[0, j].set_xscale("log"); eixos[0, j].set_yscale("log")
+    eixos[0, j].set_title(f"{s} · {SEGMENTOS[s]}", fontsize=9.5)
+    eixos[0, j].set_xlabel("pedidos (log)"); eixos[1, j].set_xlabel("recência (dias)")
+eixos[0, 0].set_ylabel("ticket médio em £ (log)"); eixos[1, 0].set_ylabel("estornos por pedido")
+plt.tight_layout(); plt.show()
+
+#%% md
+### Leitura dos cinco perfis
+
+Os nomes descrevem o que as variáveis mostram. Não afirmam lealdade nem rentabilidade, que exigiriam outras evidências.
+
+| Segmento | O que se observa | Peso |
+|---|---|---|
+| **A · Frequentes e recentes** | compraram há poucos dias, com mediana de 9 pedidos no ano. Quase todos tiveram algum estorno, o que é esperado para quem compra muito; em relação ao número de pedidos, a taxa é moderada (cerca de 0,27 estorno por pedido) | 19% dos clientes, 63% da receita |
+| **B · Recentes sem estorno** | compraram há cerca de duas semanas, poucas vezes, com ticket abaixo da mediana e quase nenhum estorno. A primeira compra na janela é mais recente que nos outros segmentos | 20% dos clientes, 10% da receita |
+| **C · Estorno recorrente** | frequência parecida com a de B (mediana de 3 pedidos), ticket mais alto e cerca de dois estornos para cada três pedidos | 20% dos clientes, 12% da receita e **37% das faturas de estorno** |
+| **D · Ocasionais de ticket alto** | um ou dois pedidos grandes, o último há cerca de três meses, sem estorno | 21% dos clientes, 12% da receita |
+| **E · Inativos de ticket baixo** | um pedido pequeno, há mais de cinco meses, sem estorno | 20% dos clientes, 2% da receita |
+
+**Evidência.** A variável de estorno separa dois grupos que a frequência não distingue. B e C têm a mesma mediana de pedidos, mas B quase não estorna e C gera 37% das faturas de estorno com 12% da receita: três vezes o seu peso na receita. O segmento A gera ainda mais estornos em número absoluto (62%), mas na proporção da receita que traz (63%). O modelo mantém A separado de C porque a taxa por pedido é bem menor.
+
+**Cuidado.** A base não distingue cancelamento de devolução. Um cancelamento antes do envio custa pouco; uma devolução custa frete e manuseio. Na {{EMPRESA}}, a variável deve ser calculada por tipo.
+
+**Resumo das Seções 3.6 a 3.9.** Quatro variáveis, preparadas com logaritmo, raiz e padronização. *k* = 5 escolhido por estabilidade e utilidade, não pela silhouette máxima. Cinco perfis de tamanho parecido, um deles definido pelo custo de servir.

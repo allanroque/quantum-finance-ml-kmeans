@@ -1,0 +1,328 @@
+#%% md
+## 3.10 Avaliação
+
+Esta seção confere os critérios C1 a C3 da Seção 1.3 e termina com um quadro dos cinco. As partes (a) e (b) usam só o ano 1. As partes (c) e (d) usam o ano 2, com o modelo já congelado. A parte (e) é um teste de robustez por país.
+
+### (a) Estabilidade do modelo final — critério C1
+
+#%% code
+ari_sementes = [adjusted_rand_score(modelo.labels_, KMeans(n_clusters=K, n_init=20, random_state=s).fit_predict(Z))
+                for s in (7, 21, 84, 123, 2024)]
+ari_media, ari_minimo = ari_por_reamostragem(Z, modelo.labels_, K, n_reamostras=30)
+estabilidade = pd.Series({"ARI entre sementes (mínimo de 5)": min(ari_sementes),
+                          "ARI por reamostragem (média de 30)": ari_media,
+                          "ARI por reamostragem (mínimo de 30)": ari_minimo}, name="modelo final, k = 5")
+display(estabilidade.round(3).to_frame())
+
+#%% md
+**Evidência.** Trocar a semente praticamente não altera a partição (ARI de 0,99). Reamostrar os clientes e reajustar o modelo leva, em média, a uma partição quase igual (acima de 0,96), e o pior dos 30 casos fica acima de 0,9. Critério C1 atendido.
+
+O valor por reamostragem aparece três vezes neste notebook, com pequenas diferenças: 0,971 no diagnóstico de *k* (10 reamostras), 0,965 aqui (30 reamostras) e 0,972 na comparação abaixo (outra forma de medir). São estimativas da mesma quantidade.
+
+### (b) Comparação com as alternativas nos dados reais
+
+A Seção 2.5 mostrou o custo de cada alternativa. Aqui comparamos a qualidade do resultado, nos mesmos dados preparados e com o mesmo número de grupos. O Ward não tem como classificar clientes que ficaram fora de uma reamostra. Para medir os três algoritmos da mesma maneira, a estabilidade é calculada reajustando em cada reamostra e comparando, nos clientes reamostrados, com a partição de referência do próprio algoritmo.
+
+#%% code
+def estabilidade_por_reajuste(ajustar, Z, rotulos_ref, n_reamostras=10, seed=SEED):
+    rng = np.random.default_rng(seed)
+    aris = []
+    for b in range(n_reamostras):
+        idx = rng.choice(len(Z), size=len(Z), replace=True)
+        aris.append(adjusted_rand_score(rotulos_ref[idx], ajustar(Z[idx], b)))
+    return float(np.mean(aris))
+
+algoritmos = {
+    "K-means": (lambda M, s: KMeans(n_clusters=K, n_init=10, random_state=s).fit_predict(M), "sim: centroide mais próximo"),
+    "Hierárquico (Ward)": (lambda M, s: AgglomerativeClustering(n_clusters=K, linkage="ward").fit_predict(M), "não"),
+    "GMM": (lambda M, s: GaussianMixture(n_components=K, n_init=3, random_state=s).fit_predict(M), "sim: maior probabilidade"),
+}
+linhas, rotulos_alg = [], {}
+for nome, (ajustar, cliente_novo) in algoritmos.items():
+    rot = modelo.labels_ if nome == "K-means" else ajustar(Z, SEED)
+    rotulos_alg[nome] = rot
+    fatias = np.bincount(rot) / len(Z)
+    linhas.append({"algoritmo": nome, "silhouette": silhouette_score(Z, rot), "Davies-Bouldin": davies_bouldin_score(Z, rot),
+                   "menor grupo (%)": 100 * fatias.min(), "maior grupo (%)": 100 * fatias.max(),
+                   "ARI por reamostragem": estabilidade_por_reajuste(ajustar, Z, rot),
+                   "concordância com o K-means (ARI)": adjusted_rand_score(modelo.labels_, rot),
+                   "classifica cliente novo?": cliente_novo})
+comparacao_alg = pd.DataFrame(linhas).set_index("algoritmo")
+display(comparacao_alg.round(3))
+
+linhas = []
+for eps in (0.3, 0.4, 0.5, 0.6, 0.8):
+    for min_pts in (10, 30):
+        rot = DBSCAN(eps=eps, min_samples=min_pts).fit_predict(Z)
+        grupos = np.bincount(rot[rot >= 0]) if (rot >= 0).any() else np.array([0])
+        linhas.append({"eps": eps, "min_samples": min_pts, "grupos encontrados": int((grupos > 0).sum()),
+                       "clientes tratados como ruído (%)": 100 * (rot == -1).mean(),
+                       "maior grupo (% dos clientes)": 100 * grupos.max() / len(Z)})
+comparacao_dbscan = pd.DataFrame(linhas)
+print("DBSCAN: o resultado depende dos dois parâmetros")
+display(comparacao_dbscan.round(1))
+
+rot_dbscan = DBSCAN(eps=0.3, min_samples=10).fit_predict(Z)
+maiores = pd.Series(rot_dbscan[rot_dbscan >= 0]).value_counts().head(4).index
+ilhas = (ano1.assign(grupo=rot_dbscan).query("grupo in @maiores").groupby("grupo")
+         .agg(clientes=("frequencia", "size"), pedidos_min=("frequencia", "min"), pedidos_max=("frequencia", "max"),
+              com_estorno=("n_estornos", lambda s: int((s > 0).sum()))).sort_values("clientes", ascending=False))
+print("Os quatro maiores grupos do DBSCAN com eps = 0.3 e min_samples = 10")
+display(ilhas)
+
+#%% md
+**Evidência.**
+
+* **Ward** tem silhouette um pouco menor, grupos desiguais (de 7% a 39% dos clientes) e, sobretudo, é instável: reamostrando os clientes, a partição muda muito (ARI perto de 0,5, contra mais de 0,9 do K-means). Soma-se o custo quadrático visto na Seção 2.5.
+* **GMM** é estável, mas produz grupos mal separados nesta geometria: a pior silhouette e o pior Davies-Bouldin. O pico de zeros na variável de estorno atrai componentes da mistura. Vale a ressalva de que a silhouette favorece grupos compactos, que é o que o K-means otimiza; ainda assim, os perfis do GMM seriam mais difíceis de explicar às áreas.
+* **DBSCAN** não devolve uma segmentação utilizável. Conforme os parâmetros, encontra de 1 a 16 grupos e descarta de 3% a 72% dos clientes como ruído. A última tabela mostra o motivo: as regiões densas que ele encontra são as ilhas criadas pelas contagens inteiras e pelo pico de zeros ("um pedido e nenhum estorno", "dois pedidos e nenhum estorno"). Ele reproduz a grade dos dados, não perfis de comportamento.
+
+**Decisão confirmada.** Nos dados reais, o K-means é a alternativa que combina grupos equilibrados, a melhor separação e alta estabilidade, além de classificar um cliente novo sem etapa adicional.
+
+### (c) Validação temporal: os segmentos continuam existindo? — critério C2
+
+Abrimos o ano 2. O modelo treinado no ano 1 é aplicado, **sem nenhum ajuste**, aos clientes que compraram no ano 2. Isso reproduz o que aconteceria em produção: um modelo fixo recebendo dados novos.
+
+Para saber se a estrutura persistiu, treinamos também um segundo modelo do zero, só com o ano 2, e comparamos as duas partições dos mesmos clientes. Se os segmentos do ano 1 fossem um acidente daquela amostra, o modelo novo encontraria outra divisão.
+
+#%% code
+ano2 = variaveis_por_cliente(t, INICIO_FUT, FIM_FUT)
+Z2 = preparo.transform(ano2[VARIAVEIS])                     # mesmo preparo, com os parâmetros do ano 1
+rotulos2_congelado = modelo.predict(Z2)                     # modelo do ano 1, sem ajuste
+ano2["segmento"] = pd.Series(rotulos2_congelado, index=ano2.index).map(LETRA)
+
+preparo_ano2 = criar_preparo()                              # modelo independente, treinado só no ano 2
+modelo_ano2 = KMeans(n_clusters=K, n_init=20, random_state=SEED).fit(preparo_ano2.fit_transform(ano2[VARIAVEIS]))
+ari_estrutura = adjusted_rand_score(rotulos2_congelado, modelo_ano2.labels_)
+
+centros_ano2 = para_unidades_de_negocio(modelo_ano2.cluster_centers_, preparo_ano2)
+custo = np.linalg.norm(preparo.transform(centros_ano2[VARIAVEIS])[:, None, :] - modelo.cluster_centers_[None, :, :], axis=2)
+grupo2, grupo1 = linear_sum_assignment(custo)               # casa cada centro do ano 2 com o mais parecido do ano 1
+centros_ano2.index = [LETRA[grupo1[list(grupo2).index(g)]] for g in range(K)]
+lado_a_lado = pd.concat({"modelo do ano 1": centros, "modelo treinado só no ano 2": centros_ano2.loc[list(SEGMENTOS)]}, axis=1)
+
+print(f"Clientes com compra no ano 2: {milhar(len(ano2))}")
+print(f"Concordância entre o modelo congelado e o modelo treinado do zero no ano 2 (ARI): {ari_estrutura:.3f}")
+display(lado_a_lado.round(2))
+
+#%% code
+dist1 = modelo.transform(Z).min(axis=1)
+dist2 = modelo.transform(Z2).min(axis=1)
+LIMIAR = float(np.quantile(dist1, 0.99))                    # calibrado no ano 1: 1% dos clientes de treino ficam além dele
+
+participacao = pd.DataFrame({"ano 1 (treino)": ano1["segmento"].value_counts(normalize=True),
+                             "ano 2 (modelo congelado)": ano2["segmento"].value_counts(normalize=True)}).loc[list(SEGMENTOS)] * 100
+participacao["diferença (p.p.)"] = participacao.iloc[:, 1] - participacao.iloc[:, 0]
+
+fig, ax = plt.subplots(figsize=(8.4, 3.8))
+largura = 0.38
+for m, (coluna, cor) in enumerate(zip(participacao.columns[:2], [AZUL, LARANJA])):
+    x = np.arange(K) + (m - 0.5) * largura
+    ax.bar(x, participacao[coluna], width=largura - 0.04, color=cor, label=coluna)
+    for xi, v in zip(x, participacao[coluna]):
+        ax.text(xi, v + 0.4, f"{v:.0f}", ha="center", fontsize=8.5, color=TINTA_2)
+ax.set_xticks(range(K), list(SEGMENTOS)); ax.set_ylabel("% dos clientes"); ax.grid(axis="x", visible=False)
+ax.set_ylim(0, participacao.iloc[:, :2].to_numpy().max() * 1.28)
+ax.set_title("Participação de cada segmento: treino e ano seguinte"); ax.legend(fontsize=9, loc="upper right", ncol=2)
+plt.tight_layout(); plt.show()
+display(participacao.round(1))
+print(f"Limiar de distância (percentil 99 do treino): {LIMIAR:.2f}")
+print(f"Clientes além do limiar: ano 1 {(dist1 > LIMIAR).mean():.1%} · ano 2 {(dist2 > LIMIAR).mean():.1%}")
+print(f"Distância mediana ao centro: ano 1 {np.median(dist1):.2f} · ano 2 {np.median(dist2):.2f}")
+
+#%% md
+**Evidência.**
+
+* O modelo congelado e o modelo treinado do zero um ano depois concordam em 0,88 de ARI. Os cinco centros reaparecem quase nos mesmos lugares: o segmento A, por exemplo, tinha centro em 9 dias, 9,4 pedidos e £ 358; um ano depois, em 10 dias, 8,7 pedidos e £ 374.
+* A participação de cada segmento muda no máximo 3 pontos percentuais. As duas janelas terminam no mesmo mês do ano, e a Seção 3.11 mostra por que isso importa.
+* A distância dos clientes aos centros não aumenta, e a parcela além do limiar continua em 1%. Os clientes do ano 2 não são estranhos ao modelo.
+
+Critério C2 atendido: **a estrutura persiste**.
+
+A pergunta seguinte é outra: o cliente fica no mesmo segmento? A matriz abaixo mostra, para cada segmento do ano 1, onde os mesmos clientes estavam no ano 2.
+
+#%% code
+destino = ano2["segmento"].reindex(ano1.index).fillna("não comprou")
+migracao = pd.crosstab(ano1["segmento"], destino, normalize="index").reindex(
+    index=list(SEGMENTOS), columns=list(SEGMENTOS) + ["não comprou"]) * 100
+
+fig, ax = plt.subplots(figsize=(7.6, 3.9))
+ax.imshow(migracao.values, cmap="Blues", vmin=0, vmax=70, aspect="auto"); ax.grid(False)
+ax.set_xticks(range(K + 1), migracao.columns); ax.set_yticks(range(K), [f"{s} · {SEGMENTOS[s]}" for s in SEGMENTOS])
+for i in range(K):
+    for j in range(K + 1):
+        v = migracao.values[i, j]
+        ax.text(j, i, f"{v:.0f}", ha="center", va="center", fontsize=10, color="#ffffff" if v > 40 else TINTA)
+ax.set_xlabel("Segmento no ano 2"); ax.set_ylabel("Segmento no ano 1")
+ax.set_title("Para onde foram os clientes de cada segmento (% da linha)")
+plt.tight_layout(); plt.show()
+
+#%% md
+**Evidência.** A estrutura é estável, mas **o cliente se move**. Só o segmento A retém perto da metade dos seus clientes; nos demais, a maior parte muda de segmento ou deixa de comprar. Do segmento E, quase dois terços não voltam.
+
+**Decisão.** O segmento é tratado como **estado atual** do cliente, não como rótulo permanente. Isso define a operação: o modelo pode ficar fixo por muito tempo, mas a atribuição de cada cliente precisa ser recalculada com frequência (mensal, na proposta). É também o que torna a segmentação útil para agir: o cliente que acabou de sair de A para D é exatamente quem o marketing quer encontrar.
+
+### (d) Os segmentos dizem algo sobre o futuro? — critério C3
+
+Para cada cliente do ano 1, medimos três coisas que só aconteceram no ano 2, uma para cada área do negócio:
+
+* **recompra**: voltou a comprar? (marketing)
+* **valor futuro**: receita líquida no ano 2 (marketing)
+* **atrito futuro**: estornos por pedido no ano 2, entre quem voltou a comprar (suporte e logística)
+
+Todos os percentuais de receita desta parte têm como base a **coorte**: os clientes do ano 1. Clientes que só apareceram no ano 2 não entram, porque não tinham segmento.
+
+#%% code
+futuro = pd.DataFrame(index=ano1.index)
+futuro["recompra"] = ano1.index.isin(ano2.index)
+futuro["valor_futuro"] = ano2["valor_liquido"].reindex(ano1.index).fillna(0.0)
+futuro["atrito_futuro"] = ano2["estornos_por_pedido"].reindex(ano1.index)   # vazio para quem não voltou
+futuro["estornos_futuros"] = ano2["n_estornos"].reindex(ano1.index).fillna(0)
+
+g = futuro.groupby(ano1["segmento"])
+resultado_futuro = pd.DataFrame({
+    "nome": pd.Series(SEGMENTOS),
+    "clientes": g.size(),
+    "recompra (%)": 100 * g["recompra"].mean(),
+    "valor futuro médio por cliente (£)": g["valor_futuro"].mean(),
+    "% da receita da coorte no ano 2": 100 * g["valor_futuro"].sum() / futuro["valor_futuro"].sum(),
+    "estornos por 100 pedidos no ano 2": 100 * g["atrito_futuro"].mean(),
+    "faturas de estorno por cliente no ano 2": g["estornos_futuros"].mean(),
+}).loc[list(SEGMENTOS)]
+display(resultado_futuro.round(1))
+print(f"A coorte do ano 1 responde por {futuro['valor_futuro'].sum() / ano2['valor_liquido'].sum():.0%} da receita líquida do ano 2.")
+
+fig, eixos = plt.subplots(1, 3, figsize=(13, 3.6))
+for ax, coluna, titulo in zip(eixos, ["recompra (%)", "valor futuro médio por cliente (£)", "estornos por 100 pedidos no ano 2"],
+                              ["Recompra no ano 2 (%)", "Valor futuro médio por cliente (£)", "Estornos por 100 pedidos no ano 2"]):
+    barras = ax.bar(list(SEGMENTOS), resultado_futuro[coluna], color=[COR_SEG[s] for s in SEGMENTOS], width=0.7)
+    for b, v in zip(barras, resultado_futuro[coluna]):
+        ax.text(b.get_x() + b.get_width() / 2, v, milhar(v), ha="center", va="bottom", fontsize=9, color=TINTA)
+    ax.set_title(titulo); ax.grid(axis="x", visible=False)
+fig.suptitle("O que os clientes de cada segmento do ano 1 fizeram no ano 2", x=0.01, ha="left", fontweight="bold")
+plt.tight_layout(); plt.show()
+
+#%% md
+**Evidência.** Os segmentos, formados só com dados do ano 1, separam o que aconteceu depois.
+
+* **Recompra:** 93% em A, 71% em B, 65% em C, 55% em D e 36% em E.
+* **Valor:** o cliente médio de A gerou mais de £ 5 mil no ano 2; o de E, cerca de £ 150. O segmento A, com 19% dos clientes, respondeu por 64% da receita que a coorte gerou no ano seguinte.
+* **Atrito:** quem estava em C continuou estornando mais: 26 estornos para cada 100 pedidos no ano 2, contra 9 a 14 nos segmentos B, D e E. O segmento A, que também estornava no ano 1, fica em 22. A propensão a estornar persiste.
+
+### Comparação com as réguas
+
+Um segmento que separa o futuro é bom sinal, mas não basta. A Aula 4 deixou a regra: um modelo só vale se bater o ingênuo. Comparamos o K-means com quatro referências, todas construídas só com o ano 1:
+
+* **Acaso:** cinco grupos sorteados. É o piso.
+* **Curva ABC:** cinco faixas de valor líquido. É a régua mais usada no varejo.
+* **RF por regras:** notas de 1 a 5 em recência e em frequência, combinadas por regras manuais em cinco grupos com nomes.
+* **Régua informada:** três faixas de valor cruzadas com "teve estorno no ano 1", seis grupos. É a régua mais simples que recebe a mesma informação nova que demos ao modelo.
+
+A medida é a **separação** que cada segmentação produz em cada resultado futuro: a parcela da variação entre clientes que é explicada pelo grupo a que pertencem. Vai de 0 (os grupos têm a mesma média) a 1 (o grupo determina o resultado). É a mesma ideia do R² da Aula 1, aplicada a grupos.
+
+#%% code
+def separacao(resultado, grupos):
+    """Parcela da variação do resultado explicada pelos grupos (0 = nenhuma, 1 = toda)."""
+    validos = resultado.notna()
+    y, g = resultado[validos].astype(float), pd.Series(np.asarray(grupos), index=resultado.index)[validos]
+    return 1 - ((y - y.groupby(g).transform("mean")) ** 2).sum() / ((y - y.mean()) ** 2).sum()
+
+def nota(serie, faixas=5):
+    """Nota de 1 a `faixas` pela posição do cliente; clientes empatados recebem a mesma nota."""
+    return np.ceil(serie.rank(pct=True, method="max") * faixas).astype(int).clip(1, faixas)
+
+nota_r, nota_f = (5 + 1) - nota(ano1["recencia"]), nota(ano1["frequencia"])     # recência menor = nota maior
+def regra_rf(r, f):
+    if r >= 4 and f >= 4: return "campeões"
+    if r >= 3 and f >= 3: return "leais"
+    if r >= 4: return "novos"
+    if f >= 3: return "em risco"
+    return "hibernando"
+
+teve_estorno = (ano1["n_estornos"] > 0).astype(int)
+reguas = {
+    "acaso (5 grupos)": np.random.default_rng(SEED).integers(0, 5, len(ano1)),
+    "curva ABC (5 faixas de valor)": nota(ano1["valor_liquido"]).to_numpy(),
+    "RF por regras (5 grupos)": np.array([regra_rf(r, f) for r, f in zip(nota_r, nota_f)]),
+    "K-means, 3 variáveis (5 grupos)": KMeans(n_clusters=K, n_init=20, random_state=SEED).fit_predict(Z[:, :3]),
+    "régua informada: 3 faixas de valor × teve estorno (6 grupos)": (nota(ano1["valor_liquido"], 3) * 10 + teve_estorno).to_numpy(),
+    "K-means, 4 variáveis: a proposta (5 grupos)": ano1["segmento"].to_numpy(),
+}
+alvos = {"recompra": futuro["recompra"].astype(float), "valor futuro (log)": np.log1p(futuro["valor_futuro"].clip(lower=0)),
+         "atrito futuro": futuro["atrito_futuro"]}
+comparacao_reguas = pd.DataFrame({alvo: {nome: separacao(y, grp) for nome, grp in reguas.items()} for alvo, y in alvos.items()})
+display(comparacao_reguas.round(3))
+
+rng_acaso = np.random.default_rng(SEED)
+teto_acaso = pd.Series({alvo: np.quantile([separacao(y, rng_acaso.integers(0, 5, len(ano1))) for _ in range(200)], 0.95)
+                        for alvo, y in alvos.items()}, name="acaso: percentil 95 de 200 sorteios")
+display(teto_acaso.round(4).to_frame().T)
+
+#%% md
+**Evidência, incluindo a parte que não favorece o modelo.**
+
+* **Recompra e valor.** Todas as segmentações ficam muito acima do acaso. A curva ABC é a melhor em valor, o que faz sentido: ela só olha para o valor. O K-means com três variáveis fica no mesmo patamar das réguas tradicionais. Com informação do mesmo tipo, não é melhor.
+* **A proposta fica abaixo em recompra e valor.** Com a quarta variável, a separação cai de 0,18 para 0,15 em recompra e de 0,27 para 0,24 em valor. O modelo gasta um dos cinco grupos para isolar o estorno.
+* **Atrito.** As réguas que não olham para o estorno quase não o separam: o RF fica no nível do acaso, e a curva ABC e o K-means de três variáveis ficam pouco acima (0,01 a 0,02). A proposta chega a 0,05, cerca de três vezes a curva ABC.
+* **Uma régua que recebe a mesma informação faz o mesmo.** Três faixas de valor cruzadas com "teve estorno" igualam a proposta em atrito (0,05) e a superam em recompra e valor (0,17 e 0,28, contra 0,15 e 0,24). O segmento C é quase essa regra: reúne praticamente todos os clientes que tiveram estorno e não são compradores frequentes.
+* Em valor absoluto, a separação do atrito é pequena (5%). O atrito futuro de um cliente é difícil de antecipar por qualquer régua; o segmento indica propensão, não certeza.
+
+**O que isto significa.** É o mesmo resultado do notebook de reinforcement learning da Aula 4, em que a regra que enxergava a previsão venceu o agente: com a mesma informação, uma regra bem desenhada e um modelo aprendido chegam a lugares parecidos. O que pesou aqui foi a informação nova, a variável de estorno, e não o algoritmo.
+
+**Decisão.** Mantemos o K-means, sabendo o que ele entrega e o que não entrega.
+
+* **Não entrega** uma separação do futuro melhor que a de uma régua bem informada. Se a empresa fosse operar só com valor e estorno, em um único mercado, a régua bastaria e seria mais simples.
+* **Entrega** três coisas que a tabela não mede. A régua informada tem seis células porque cruza duas variáveis; cada dimensão nova (recência, atendimento, canal, categoria) multiplica as células, enquanto o K-means mantém o número de perfis. Os limites da régua precisam ser revistos por alguém em cada mercado; o K-means os recalcula a cada retreino. E o centro de cada segmento descreve o cliente em todas as variáveis ao mesmo tempo.
+* Essas vantagens são **estruturais e não foram demonstradas** na prova de conceito, que tem quatro variáveis e um país dominante. São a hipótese que a fase de validação do roteiro precisa confirmar com os dados da {{EMPRESA}} (Seção 4.4).
+
+### O que a curva ABC não vê
+
+Para tornar concreta a diferença entre uma faixa de valor e um perfil, olhamos só para os clientes da faixa mais alta da curva ABC: os 20% de maior valor, que uma política baseada só em valor trataria como um grupo único.
+
+#%% code
+faixa_alta = nota(ano1["valor_liquido"]) == 5
+dentro = pd.concat([ano1.loc[faixa_alta, ["segmento", "recencia", "estornos_por_pedido"]], futuro.loc[faixa_alta]], axis=1)
+g = dentro.groupby("segmento")
+abc_nao_ve = pd.DataFrame({
+    "nome": pd.Series(SEGMENTOS),
+    "clientes": g.size(),
+    "% da faixa alta": 100 * g.size() / len(dentro),
+    "recência (mediana, dias)": g["recencia"].median(),
+    "estornos por 100 pedidos no ano 1": 100 * g["estornos_por_pedido"].mean(),
+    "recompra no ano 2 (%)": 100 * g["recompra"].mean(),
+    "valor futuro mediano (£)": g["valor_futuro"].median(),
+}).dropna(subset=["clientes"])
+print(f"Clientes na faixa mais alta da curva ABC: {milhar(len(dentro))}")
+display(abc_nao_ve.round(1))
+
+#%% md
+**Evidência.** Dos clientes que a curva ABC coloca na mesma faixa de maior valor, dois terços estão no segmento A e voltam a comprar em 96% dos casos. Mas **um em cada quatro está no segmento C ou no D**: compraram muito, não compram há mais de dois meses, e a recompra deles cai para 78% e 70%. Os do segmento C, além disso, tiveram mais de um estorno para cada dois pedidos. Para a curva ABC, são todos o mesmo cliente. Para a operação, são conversas diferentes.
+
+### (e) Robustez: o modelo depende do país?
+
+A {{EMPRESA}} opera em 12 países. A base da prova de conceito tem 41, mas nove em cada dez clientes são do Reino Unido. Conferimos duas coisas: se treinar só com o Reino Unido muda a partição dos clientes de lá, e como os clientes de fora se distribuem pelos segmentos.
+
+#%% code
+reino_unido = (ano1["pais"] == "United Kingdom").to_numpy()
+preparo_uk = criar_preparo()
+rotulos_uk = KMeans(n_clusters=K, n_init=20, random_state=SEED).fit_predict(preparo_uk.fit_transform(ano1.loc[reino_unido, VARIAVEIS]))
+ari_pais = adjusted_rand_score(modelo.labels_[reino_unido], rotulos_uk)
+por_origem = pd.crosstab(ano1["segmento"], np.where(reino_unido, "Reino Unido", "outros países"), normalize="columns").loc[list(SEGMENTOS)] * 100
+print(f"Clientes do Reino Unido: {reino_unido.mean():.1%} · outros países: {milhar((~reino_unido).sum())} clientes")
+print(f"Concordância entre o modelo global e um modelo só do Reino Unido, nos clientes do Reino Unido (ARI): {ari_pais:.3f}")
+display(por_origem.round(1))
+
+#%% md
+**Evidência.** Treinar só com o Reino Unido leva praticamente à mesma partição (ARI de 0,96): os clientes de fora não distorcem o modelo. Mas eles se distribuem de outro jeito: concentram-se nos segmentos C e D, de pedidos grandes e espaçados, o que é coerente com quem paga frete internacional.
+
+**Cuidado.** Com um país dominante, a prova de conceito não consegue testar o caso da {{EMPRESA}}, em que 12 mercados têm moeda, renda e hábitos diferentes. Um ticket alto em um país pode ser mediano em outro. A proposta para produção é manter as mesmas variáveis e o mesmo algoritmo e **padronizar por país**, de modo que "ticket alto" signifique alto para aquele mercado. Essa escolha é testada na fase de validação do roteiro (Seção 4.4).
+
+**Resumo da Seção 3.10.**
+
+| Critério | Resultado |
+|---|---|
+| C1 Estável | ARI acima de 0,96 por reamostragem e de 0,99 entre sementes |
+| C2 Persistente | modelo do ano 1 e modelo do ano 2 concordam em 0,88; participações mudam no máximo 3 p.p. entre janelas do mesmo mês |
+| C3 Informativo | separa recompra, valor e atrito do ano seguinte muito acima do acaso; não supera uma régua que receba a mesma informação |
+| C4 Acionável | cinco segmentos de 19% a 21% dos clientes, com perfis distintos (Seção 3.9) |
+| C5 Escalável | custo de treino aproximadamente linear (Seção 2.5); atribuição em lote medida na Seção 3.11 |

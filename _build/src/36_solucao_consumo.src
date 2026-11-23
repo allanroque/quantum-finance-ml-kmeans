@@ -1,0 +1,188 @@
+#%% md
+## 3.11 Como o resultado é consumido
+
+O modelo entrega três coisas à operação: uma tabela de segmentos atualizada em lote, uma consulta por cliente para uso em tempo real e um conjunto de sinais de monitoramento.
+
+### (a) A tabela de segmentos
+
+É o produto principal: uma linha por cliente, publicada a cada ciclo. As áreas não precisam conhecer o modelo; consomem a tabela pelo CRM, pela fila de atendimento e pelas regras de logística.
+
+#%% code
+VERSAO = "kmeans-k5-v1"
+ano1["distancia"] = dist1
+ano1["abster"] = ano1["distancia"] > LIMIAR
+tabela_segmentos = (ano1.reset_index()[["cliente", "segmento", "distancia", "abster"]]
+                    .assign(nome=lambda d: d["segmento"].map(SEGMENTOS), versao=VERSAO, fim_da_janela=FIM_OBS.date())
+                    [["cliente", "segmento", "nome", "distancia", "abster", "versao", "fim_da_janela"]])
+display(tabela_segmentos.head(6).round(2))
+print(f"{milhar(len(tabela_segmentos))} clientes · marcados para abstenção: {tabela_segmentos['abster'].sum()}")
+
+#%% md
+### (b) Consulta por cliente, com abstenção
+
+Para um cliente novo ou para uma consulta em tempo real, basta resumir o comportamento dele na mesma janela e aplicar o mesmo preparo e o mesmo modelo. A resposta custa cinco distâncias.
+
+O K-means sempre devolve um segmento, mesmo para um cliente que não se parece com nenhum perfil. Por isso a consulta pode **abster-se** em três situações: dado ausente, valor fora do domínio ou cliente distante demais de todos os centros. O limiar de distância é o percentil 99 do treino.
+
+**Cuidado.** A distância é uma medida de estranheza, não uma probabilidade nem uma confiança estatística. O limiar é um ponto de partida e deve ser recalibrado no piloto.
+
+#%% code
+def consultar_segmento(registro):
+    """Recebe as quatro variáveis de um cliente e devolve o segmento ou uma abstenção com o motivo."""
+    base = {"versao": VERSAO, "janela": "12 meses"}
+    ausentes = [v for v in VARIAVEIS if registro.get(v) is None or pd.isna(registro.get(v))]
+    if ausentes:
+        return {"status": "abstencao", "motivo": f"dados ausentes: {', '.join(ausentes)}", **base}
+    if not (registro["recencia"] >= 0 and registro["frequencia"] >= 1 and registro["ticket_medio"] > 0
+            and 0 <= registro["estornos_por_pedido"] <= 1):
+        return {"status": "abstencao", "motivo": "valor fora do domínio das variáveis", **base}
+    distancias = modelo.transform(preparo.transform(pd.DataFrame([registro])[VARIAVEIS]))[0]
+    grupo = int(distancias.argmin())
+    resposta = {"segmento": LETRA[grupo], "nome": SEGMENTOS[LETRA[grupo]],
+                "distancia": round(float(distancias[grupo]), 2), "limiar": round(LIMIAR, 2), **base}
+    if distancias[grupo] > LIMIAR:
+        return {"status": "abstencao", "motivo": "distante de todos os perfis; encaminhar para análise", **resposta}
+    return {"status": "segmento", **resposta}
+
+casos = {
+    "cliente típico": {"recencia": 12, "frequencia": 8, "ticket_medio": 350.0, "estornos_por_pedido": 0.25},
+    "registro incompleto": {"recencia": 30, "frequencia": 2, "ticket_medio": None, "estornos_por_pedido": 0.0},
+    "cliente extremo": {"recencia": 1, "frequencia": 400, "ticket_medio": 30_000.0, "estornos_por_pedido": 0.9},
+}
+respostas = {nome: consultar_segmento(reg) for nome, reg in casos.items()}
+for nome, r in respostas.items():
+    print(f"{nome}: {r}")
+assert respostas["cliente típico"]["status"] == "segmento"
+assert respostas["registro incompleto"]["status"] == "abstencao"
+assert respostas["cliente extremo"]["status"] == "abstencao"
+
+#%% md
+O critério C5 pede que classificar seja barato. A célula abaixo mede as duas formas de uso: a atribuição em lote de um milhão de clientes (sorteados com reposição da base) e a consulta individual.
+
+#%% code
+um_milhao = ano1[VARIAVEIS].sample(1_000_000, replace=True, random_state=SEED)
+t0 = time.perf_counter()
+segmentos_lote = modelo.predict(preparo.transform(um_milhao))
+tempo_lote = time.perf_counter() - t0
+t0 = time.perf_counter()
+for _ in range(200):
+    consultar_segmento(casos["cliente típico"])
+tempo_consulta = (time.perf_counter() - t0) / 200
+print(f"Atribuição em lote: {milhar(len(um_milhao))} clientes em {tempo_lote:.2f} s")
+print(f"Consulta individual: {1000 * tempo_consulta:.1f} ms por cliente")
+
+#%% md
+**Evidência.** Atribuir um milhão de clientes ao segmento mais próximo leva centésimos de segundo, e uma consulta individual, com as validações, cerca de um milissegundo. Os tempos são desta máquina; a ordem de grandeza é o que interessa. Critério C5 atendido também no uso, e não só no treino.
+
+#%% md
+### (c) O que cada área faz com cada segmento
+
+A tabela abaixo é a tradução do modelo em operação. As ações são **hipóteses a testar**, uma por célula, e não resultados medidos: o modelo descreve o comportamento, e só um experimento controlado mostra se a ação muda esse comportamento.
+
+| Segmento | Marketing e CRM | Suporte | Logística |
+|---|---|---|---|
+| **A · Frequentes e recentes** | reconhecimento e acesso antecipado; não gastar desconto com quem já volta em 93% dos casos | fila prioritária e canal direto | devolução simplificada: o volume é alto, mas proporcional à receita |
+| **B · Recentes sem estorno** | estímulo à segunda e à terceira compra; é onde a primeira compra é mais recente | atendimento padrão | política padrão |
+| **C · Estorno recorrente** | conteúdo que reduza a compra errada: guia de tamanho, descrição, avaliações | atendimento que investigue o motivo do estorno, não só o processe | revisar a política para o perfil: conferência do pedido antes do envio, causa do estorno por categoria |
+| **D · Ocasionais de ticket alto** | reativação dirigida antes do terceiro mês sem compra; oferta de reposição | atendimento padrão, com atenção ao primeiro contato após a reativação | consolidação de frete: pedidos grandes e espaçados |
+| **E · Inativos de ticket baixo** | campanha de baixo custo ou nenhuma: só 36% voltam | autoatendimento | política padrão |
+
+**Cuidado.** O segmento C não é uma lista de clientes a punir. O estorno pode ter origem na operação: produto mal descrito, avaria no transporte, atraso. O uso proposto é investigar a causa e reduzir o atrito. Restringir benefícios com base no segmento exigiria a revisão descrita na Seção 4.2.
+
+### (d) Artefatos entregues
+
+O pipeline grava quatro arquivos: a tabela de segmentos, o modelo com o preparo, os perfis de referência e um manifesto com tudo o que é necessário para reproduzir ou auditar a versão.
+
+#%% code
+PASTA_SAIDA = Path("saidas")
+PASTA_SAIDA.mkdir(exist_ok=True)
+tabela_segmentos.round({"distancia": 4}).to_csv(PASTA_SAIDA / "segmentos_clientes.csv", index=False)
+perfil.round(2).to_csv(PASTA_SAIDA / "perfil_dos_segmentos.csv", index_label="segmento")
+joblib.dump({"preparo": preparo, "modelo": modelo, "letra_por_grupo": LETRA, "nomes": SEGMENTOS,
+             "variaveis": VARIAVEIS, "limiar": LIMIAR, "versao": VERSAO}, PASTA_SAIDA / "segmentador_kmeans_k5_v1.joblib")
+manifesto_modelo = {
+    "versao": VERSAO, "algoritmo": "KMeans", "k": K, "n_init": 20, "semente": SEED, "variaveis": VARIAVEIS,
+    "transformacoes": {"recencia": "log1p", "frequencia": "log", "ticket_medio": "log", "estornos_por_pedido": "raiz quadrada"},
+    "janela_de_treino": [str(INICIO_OBS.date()), str(FIM_OBS.date())], "clientes_no_treino": int(len(ano1)),
+    "limiar_de_abstencao": round(LIMIAR, 4), "ari_reamostragem": round(ari_media, 4),
+    "centros_em_unidades_de_negocio": centros.round(3).to_dict(orient="index"),
+    "dados": manifesto, "bibliotecas": {p: metadata.version(p) for p in ["numpy", "pandas", "scikit-learn"]},
+}
+(PASTA_SAIDA / "manifesto_modelo.json").write_text(json.dumps(manifesto_modelo, indent=2, ensure_ascii=False), encoding="utf-8")
+for arquivo in sorted(PASTA_SAIDA.iterdir()):
+    print(f"{arquivo.name:36s} {arquivo.stat().st_size / 1024:8.1f} KB")
+
+#%% md
+### (e) Monitoramento
+
+Um modelo de segmentação envelhece quando o comportamento dos clientes muda. Três sinais, todos baratos de calcular a cada ciclo, dizem se isso está acontecendo:
+
+| Sinal | O que indica | Gatilho inicial de investigação |
+|---|---|---|
+| **Participação de cada segmento** | a base está mudando de composição | variação acima de 5 p.p. |
+| **Distância mediana aos centros** | os clientes estão se afastando dos perfis | aumento acima de 20% |
+| **Taxa de abstenção** | clientes que não se parecem com nenhum perfil | acima de 3% |
+
+Os gatilhos são pontos de partida a calibrar no piloto. A célula abaixo simula o monitoramento com os dados disponíveis: aplica o modelo congelado a janelas de 12 meses que terminam a cada trimestre do ano 2.
+
+#%% code
+linhas = []
+for fim in pd.to_datetime(["2010-12-01", "2011-03-01", "2011-06-01", "2011-09-01", "2011-12-01"]):
+    f = variaveis_por_cliente(t, fim - pd.DateOffset(years=1), fim)
+    d = modelo.transform(preparo.transform(f[VARIAVEIS]))
+    seg = pd.Series(d.argmin(axis=1)).map(LETRA)
+    linhas.append({"fim da janela": fim.strftime("%m/%Y"), "clientes": len(f),
+                   **{s: 100 * (seg == s).mean() for s in SEGMENTOS},
+                   "distância mediana": float(np.median(d.min(axis=1))), "abstenção (%)": 100 * (d.min(axis=1) > LIMIAR).mean()})
+monitor = pd.DataFrame(linhas).set_index("fim da janela")
+monitor["maior variação de participação (p.p.)"] = (monitor[list(SEGMENTOS)] - monitor[list(SEGMENTOS)].iloc[0]).abs().max(axis=1)
+display(monitor.round(2))
+
+fig, eixos = plt.subplots(1, K, figsize=(13.5, 2.9), sharey=True)
+for ax, s in zip(eixos, SEGMENTOS):
+    referencia = monitor[s].iloc[0]
+    ax.axhspan(referencia - 5, referencia + 5, color=GRADE, alpha=0.6, lw=0)
+    ax.axhline(referencia, color=TINTA_2, lw=1, ls="--")
+    ax.plot(monitor.index, monitor[s], marker="o", ms=5, color=COR_SEG[s])
+    ax.set_title(f"{s} · {SEGMENTOS[s]}", fontsize=9); ax.tick_params(axis="x", labelsize=7.5, rotation=45)
+eixos[0].set_ylabel("% dos clientes")
+fig.suptitle("Participação de cada segmento com o modelo congelado, por trimestre (tracejado: treino; faixa: ± 5 p.p.)",
+             x=0.01, ha="left", fontweight="bold", fontsize=10.5)
+plt.tight_layout(); plt.show()
+
+#%% md
+**Evidência.** A simulação mostra dois comportamentos diferentes.
+
+* A **distância mediana** e a **abstenção** ficam praticamente paradas o ano todo (1,04 a 1,07 e cerca de 1%). Por esses dois sinais, o modelo do ano 1 não precisaria de retreino.
+* A **participação** dos segmentos sai da faixa nas três janelas intermediárias: o segmento B cai de 20% para 10% em março e volta a 21% em dezembro; D e E fazem o caminho contrário.
+
+Não é que o modelo tenha envelhecido e depois voltado ao normal. O que mudou foi a época do ano. A recência depende de quando a fotografia é tirada: uma janela que termina em dezembro vem logo depois do pico de outubro e novembro e encontra muitos clientes com compra recente; uma janela que termina em março encontra esses mesmos clientes três meses mais distantes. É a sazonalidade da Aula 4 aparecendo dentro de um modelo de agrupamento.
+
+**Decisão.** A participação por segmento é comparada com **o mesmo mês do ano anterior**, não com o treino. Nessa comparação (dezembro de 2010 contra dezembro de 2011), a maior variação é de 2,8 p.p. e o gatilho não dispara. Os gatilhos de distância e de abstenção não dependem da época e valem em qualquer mês. A base só permite conferir essa regra para dezembro; para os outros meses ela é uma hipótese, que exige mais um ano de histórico.
+
+**Cuidado.** O efeito não é só de monitoramento. Um cliente que compra todo ano em novembro aparece como recente em dezembro e como inativo em junho, sem ter mudado de hábito. Na {{EMPRESA}}, a leitura da recência deve levar em conta o ritmo de compra de cada cliente. É uma limitação da proposta, retomada na Seção 4.1.
+
+## 3.12 Pipeline de treinamento e operação
+
+Há dois ciclos com ritmos diferentes, como a Seção 3.10 justificou: a estrutura é estável, o cliente se move.
+
+**Ciclo de atribuição (mensal).** Recalcula o segmento de cada cliente com o modelo vigente.
+
+1. Extrair pedidos e estornos dos últimos 12 meses.
+2. Aplicar os filtros auditados da Seção 3.3 e calcular as quatro variáveis por cliente.
+3. Aplicar o preparo e o modelo; marcar abstenções.
+4. Publicar a tabela de segmentos com versão e data.
+5. Calcular os três sinais de monitoramento e compará-los aos gatilhos: a participação contra o mesmo mês do ano anterior; distância e abstenção contra o treino.
+
+**Ciclo de retreino (anual, ou quando um gatilho dispara).** Substitui o modelo.
+
+1. Treinar um candidato com a janela mais recente, repetindo o diagnóstico de *k* e de estabilidade.
+2. Casar os centros do candidato com os do modelo vigente, como na Seção 3.10 (c). Os números dos grupos mudam entre treinos; os perfis é que precisam ser comparados.
+3. **Promover** o candidato só se ele for estável (ARI por reamostragem acima de 0,9) e se as áreas validarem os perfis. Se um perfil mudou de sentido, as políticas associadas são revistas antes da troca.
+4. Manter o modelo anterior disponível para reverter.
+
+**Plano de contingência.** Se o pipeline falhar em um ciclo, a operação continua com a última tabela publicada. Se a falha persistir, a curva ABC serve de reserva: não enxerga o atrito, mas a Seção 3.10 mostrou que separa valor e recompra ao menos tão bem quanto o modelo.
+
+**Em escala.** O treino usa o mesmo algoritmo. Para bases que não cabem em memória, a variante em lotes (`MiniBatchKMeans`) lê os clientes aos poucos. A atribuição mensal é uma multiplicação de matrizes e pode ser feita no próprio banco de dados, sem servir um modelo.
+
+**Resumo da Seção 3.** A solução é um pipeline em lote que transforma pedidos e estornos em quatro variáveis por cliente, prepara a distância e aplica um K-means com cinco grupos. Na prova de conceito, os segmentos são estáveis, reaparecem um ano depois e separam o comportamento futuro muito acima do acaso, sem superar uma régua que receba a mesma informação. O resultado chega às áreas como uma tabela, uma consulta com abstenção e três sinais de monitoramento.

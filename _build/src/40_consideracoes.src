@@ -1,0 +1,211 @@
+#%% md
+---
+# 4. Considerações e Potencial de Impacto
+
+## 4.1 Limitações
+
+### Do modelo
+
+* **Os segmentos são uma convenção útil, não grupos naturais.** A silhouette de 0,27 é baixa e indica que os grupos se tocam: o comportamento de compra é um contínuo, e o K-means traça fronteiras nele. Por isso a proposta se apoia em estabilidade e persistência, não na silhouette. Um cliente perto da fronteira troca de segmento com uma pequena variação.
+* **A atribuição é rígida.** Cada cliente pertence a um único segmento, mesmo quando está entre dois. A distância ao centro e a abstenção atenuam o problema, sem resolvê-lo.
+* ***k* é uma escolha nossa.** Foi justificada por estabilidade e utilidade (Seção 3.8), mas outro time poderia defender *k* = 3 com os mesmos dados.
+* **A recência é sazonal.** A fotografia de dezembro e a de junho distribuem os clientes de forma diferente sem que ninguém tenha mudado de hábito (Seção 3.11). O monitoramento trata isso com uma referência sazonal, que só pôde ser conferida para dezembro; a atribuição mensal ainda não trata.
+* **A variável de estorno é instável para quem compra pouco.** Um pedido e um estorno já levam ao valor máximo. Com poucos pedidos, a variável diz menos do que parece.
+* **Uma régua simples faz o mesmo com a mesma informação.** Faixas de valor cruzadas com "teve estorno" separam o futuro tão bem quanto o modelo (Seção 3.10 d). A vantagem do K-means sobre essa régua é estrutural e não foi demonstrada aqui.
+* **O modelo descreve, não prescreve.** Ele mostra que os clientes do segmento D voltam em 55% dos casos. Não diz se uma campanha mudaria esse número. Só um experimento controlado responde.
+
+### Da prova de conceito
+
+* **Outra empresa, outra época, outra escala.** Uma loja britânica de presentes, de 2009 a 2011, com cerca de 4 mil clientes por ano e participação de atacadistas. A {{EMPRESA}} é, pelo enunciado, uma operação muito maior, com outro catálogo e presença em 12 países. O que se transfere é o método, não os números.
+* **Um país domina a base.** Nove em cada dez clientes são do Reino Unido. A questão central para a {{EMPRESA}}, que é segmentar mercados com moeda e hábitos diferentes, não pôde ser testada.
+* **O estorno mistura cancelamento e devolução**, que têm custos muito diferentes.
+* **Faltam as fontes que mais interessam ao custo de servir:** atendimento, frete, logística reversa. O custo de servir foi aproximado por uma única variável, e a logística só aparece por meio dos estornos.
+* **Parte das compras ficou de fora:** 22% das linhas não têm cliente identificado.
+* **A validação no ano 2 não foi totalmente cega.** No notebook, nenhuma escolha usa o ano 2, e as decisões se justificam por medidas do ano 1 (Seção 3.8). Mas, durante o desenvolvimento, resultados do ano 2 foram vistos enquanto configurações alternativas eram exploradas, e não é possível garantir que as escolhas não foram influenciadas. Com dois anos de dados, não há uma terceira janela para confirmar o resultado de forma independente. No projeto, esse papel cabe à fase de validação e ao piloto.
+
+## 4.2 Riscos e mitigação
+
+| Risco | Como aparece | Mitigação proposta |
+|---|---|---|
+| **Tratamento desigual sem justificativa** | segmentos podem se correlacionar com país, renda ou idade, mesmo sem usar esses atributos | não usar atributos pessoais no modelo; auditar a composição de cada segmento a cada retreino; ações restritivas passam por revisão humana |
+| **Privacidade e regulação** | segmentar é uma forma de perfilamento, sujeita à LGPD e às leis equivalentes dos outros países | base legal definida, transparência com o cliente e canal para pedir revisão de decisões automatizadas (LGPD, art. 20); o modelo usa quatro agregados de comportamento, sem dado sensível |
+| **Punir o cliente pelo erro da operação** | o segmento C pode refletir produto mal descrito, avaria ou atraso | usar o segmento para investigar a causa; nenhuma restrição automática |
+| **Profecia autorrealizável** | deixar de investir no segmento E garante que ninguém de lá volte, e o modelo "acerta" | manter um grupo de controle permanente em cada segmento, que recebe o tratamento padrão |
+| **Deriva e sazonalidade** | o comportamento muda e os perfis deixam de descrever a base | três sinais de monitoramento, com referência sazonal; retreino com critérios de promoção (Seção 3.12) |
+| **Falsa precisão** | as áreas tratam o segmento como verdade sobre o cliente | publicar a distância e a abstenção junto com o segmento; preferir políticas graduais a cortes bruscos |
+| **Dependência do pipeline** | uma falha paralisa três áreas | última tabela publicada como reserva; curva ABC como segunda reserva |
+
+## 4.3 Potencial de valor
+
+O valor da proposta vem de três fontes.
+
+**1. Uma linguagem comum para três áreas.** Suporte, logística e marketing passam a responder à mesma pergunta com a mesma tabela. Sem isso, cada área tende a manter a sua própria régua.
+
+**2. Escala sem regras manuais.** Cinco perfis substituem uma grade de faixas por variável, por área e por país. Acrescentar uma dimensão nova (canal, categoria, contatos de atendimento) é acrescentar uma coluna, não multiplicar a grade. Recalibrar para um novo mercado é retreinar. É uma vantagem estrutural, ainda não medida: a prova de conceito mostrou que, com quatro variáveis e um mercado, uma régua simples faz o mesmo (Seção 3.10 d).
+
+**3. Ações dirigidas onde o comportamento difere.** É a única fonte que se pode dimensionar com os dados da prova de conceito, e é o que a célula abaixo faz.
+
+**Cuidado.** Os números a seguir são **cenários**, não previsões. O efeito de cada ação é uma hipótese declarada; o que os dados fornecem é o tamanho de cada segmento e o comportamento observado no ano 2. Servem para decidir onde vale a pena fazer o piloto, e não para prometer resultado. Os valores em libras são os da loja da prova de conceito.
+
+#%% code
+coorte = futuro.join(ano1["segmento"])
+receita_ano2 = coorte["valor_futuro"].sum()
+estornos_ano2 = coorte["estornos_futuros"].sum()
+FATOR_VALOR = 0.5      # hipótese conservadora: o cliente reativado gasta metade do que gasta quem voltaria sozinho
+
+linhas = []
+for seg in ["C", "D"]:                       # valor relevante e recompra intermediária
+    s = coorte[coorte["segmento"] == seg]
+    valor_de_quem_voltou = s.loc[s["recompra"], "valor_futuro"].mean()
+    for pp in (1, 3, 5):
+        ganho = len(s) * pp / 100 * valor_de_quem_voltou * FATOR_VALOR
+        linhas.append({"segmento": f"{seg} · {SEGMENTOS[seg]}", "hipótese de efeito": f"+{pp} p.p. de recompra",
+                       "clientes a mais": len(s) * pp / 100, "receita adicional (£)": ganho,
+                       "% da receita da coorte no ano 2": 100 * ganho / receita_ano2})
+cenario_reativacao = pd.DataFrame(linhas).set_index(["segmento", "hipótese de efeito"])
+print("Cenário 1 — reativação dirigida")
+display(cenario_reativacao.round(2))
+
+linhas = []
+for seg in ["A", "C"]:                       # onde está o volume (A) e onde está a maior taxa (C)
+    s = coorte[coorte["segmento"] == seg]
+    for reducao in (5, 10, 20):
+        evitados = s["estornos_futuros"].sum() * reducao / 100
+        linhas.append({"segmento": f"{seg} · {SEGMENTOS[seg]}", "hipótese de efeito": f"-{reducao}% de estornos",
+                       "estornos evitados": evitados, "% dos estornos da coorte no ano 2": 100 * evitados / estornos_ano2,
+                       **{f"economia a £{c} por estorno": evitados * c for c in (5, 10, 20)}})
+cenario_atrito = pd.DataFrame(linhas).set_index(["segmento", "hipótese de efeito"])
+print("Cenário 2 — redução de atrito (custo por estorno é hipótese: a base não tem custos)")
+display(cenario_atrito.round(1))
+print(f"Referência: receita líquida da coorte no ano 2 £ {milhar(receita_ano2)} · faturas de estorno da coorte no ano 2: {milhar(estornos_ano2)}")
+
+#%% md
+**Leitura.**
+
+* **Reativação.** Os segmentos C e D somam cerca de 40% dos clientes e voltam em 55% a 65% dos casos. Cada ponto percentual a mais de recompra em um desses segmentos vale, com a hipótese conservadora, da ordem de 0,1% da receita da coorte no ano seguinte. O efeito unitário é pequeno; a escala é que decide.
+* **Atrito.** A maior parte dos estornos do ano 2 vem do segmento A, porque é quem mais compra. O segmento C tem a maior taxa, mas menos volume. A consequência prática é que **melhorias de processo** (descrição, embalagem, conferência) rendem mais quando aplicadas a todos, e **ações dirigidas** rendem mais em C, onde a taxa é alta.
+* **Os dois cenários não se comparam diretamente.** O de reativação está em receita bruta, sem margem e sem o custo da campanha; o de atrito está em custo evitado, com um custo por estorno que é hipótese. Nos valores testados, as faixas se sobrepõem. Qual dos dois vale mais depende da margem e do custo real de um estorno na {{EMPRESA}}, que a prova de conceito não conhece.
+* **O que os cenários não capturam.** O ganho de priorizar o atendimento do segmento A e o de não gastar desconto com quem já voltaria. Ambos dependem de custos que a base não tem.
+
+A ordem de grandeza honesta é esta: a segmentação não cria receita sozinha. Ela mostra onde cada libra de esforço encontra um comportamento diferente. O valor aparece quando as áreas testam ações por segmento e mantêm as que funcionam.
+
+## 4.4 Roteiro de implantação
+
+| Fase | O que se faz | Critério para avançar |
+|---|---|---|
+| **1. Fundação** | reproduzir o pipeline com os dados da {{EMPRESA}} em um país; separar cancelamento de devolução; incluir contatos de atendimento | variáveis calculadas e auditadas para toda a base do país |
+| **2. Validação** | repetir as Seções 3.7 a 3.10 com os dados reais; comparar o K-means com uma régua informada usando todas as dimensões disponíveis; decidir entre modelo único com padronização por país e um modelo por país | critérios C1 a C3 atendidos; vantagem sobre a régua confirmada quando há mais dimensões e mais mercados; perfis validados pelas três áreas |
+| **3. Piloto** | uma área, uma ação, um segmento, com grupo de controle (sugestão: reativação do segmento D) | efeito medido contra o controle, com intervalo de confiança |
+| **4. Expansão** | demais áreas e países; consulta em tempo real na fila de atendimento | cada nova ação entra com o seu próprio grupo de controle |
+| **5. Operação** | atribuição mensal, monitoramento com referência sazonal, retreino anual | sinais dentro dos gatilhos; auditoria de composição a cada retreino |
+
+**Como o piloto mede sucesso.** Pela diferença entre o grupo tratado e o grupo de controle em indicadores de negócio: taxa de recompra, estornos por pedido, tempo de atendimento. As medidas deste notebook (silhouette, ARI) dizem se a segmentação é sólida; só o experimento diz se ela gera valor.
+
+**Próximos passos técnicos, com as outras arquiteturas da disciplina.**
+
+* **Apriori dentro de cada segmento (Aula 3):** regras de associação por perfil, para recomendação. A Aula 3 alertou que uma regra global não vale automaticamente em todos os segmentos.
+* **Previsão do tamanho de cada segmento (Aula 4):** tratar a participação mensal como série temporal, o que resolve de forma direta a sazonalidade encontrada no monitoramento.
+* **Escolha da ação por segmento (Aula 4):** com os resultados dos experimentos acumulados, um agente de reinforcement learning pode aprender qual ação tomar em cada estado. O segmento seria o estado; a margem, a recompensa.
+
+## 4.5 Conclusão
+
+O muro da escalabilidade operacional da {{EMPRESA}} é, em boa parte, a falta de uma forma barata de responder "com que tipo de cliente estou lidando?". A proposta responde com um K-means sobre quatro variáveis de comportamento, que cobre valor e custo de servir.
+
+A escolha da arquitetura se apoia em três pilares. O problema não tem rótulo, e o K-means é a arquitetura da disciplina feita para isso. O problema é de escala, e o K-means tem custo aproximadamente linear e classifica um cliente novo com cinco distâncias. E o resultado precisa ser lido por três áreas, e o centroide é o próprio perfil.
+
+A prova de conceito mostrou que os segmentos são estáveis, reaparecem um ano depois e separam o comportamento futuro muito acima do acaso. Mostrou também três limites. Com a mesma informação, uma régua simples separa o futuro tão bem quanto o modelo: o que pesou foi incluir o estorno, não o algoritmo, e a vantagem do K-means em dimensões e em mercados ainda precisa ser confirmada. A participação dos segmentos oscila com a época do ano. E o efeito das ações só um experimento mede. Reportamos os três porque uma proposta que vai orientar suporte, logística e marketing precisa ser honesta sobre o que entrega.
+
+---
+## Conferência das afirmações do texto
+
+As conclusões escritas acima citam números da execução. A célula abaixo relê os resultados e confere as principais afirmações, cada uma com uma pequena folga. Se o notebook for reexecutado em outro ambiente e algum resultado mudar de forma relevante, a diferença aparece aqui.
+
+#%% code
+k3v, proposta, abc, rf, informada = (comparacao_reguas.loc[n] for n in [
+    "K-means, 3 variáveis (5 grupos)", "K-means, 4 variáveis: a proposta (5 grupos)", "curva ABC (5 faixas de valor)",
+    "RF por regras (5 grupos)", "régua informada: 3 faixas de valor × teve estorno (6 grupos)"])
+expoente = resumo_escala["expoente de crescimento"]
+ari_k = diag["ARI reamostragem (média)"]
+atrito_ano2 = resultado_futuro["estornos por 100 pedidos no ano 2"]
+variacao_sazonal = monitor["maior variação de participação (p.p.)"]
+conferencia = [
+    ("Cinco segmentos, cada um com 18% a 22% dos clientes", perfil["% dos clientes"].min(), perfil["% dos clientes"].between(18, 22).all()),
+    ("ARI por reamostragem do modelo final acima de 0,95", ari_media, ari_media > 0.95),
+    ("k = 5 é mais estável que k = 4 e k = 6", ari_k[5], ari_k[5] > max(ari_k[4], ari_k[6])),
+    ("K-means é mais estável que o hierárquico (Ward)", comparacao_alg.loc["Hierárquico (Ward)", "ARI por reamostragem"],
+     comparacao_alg.loc["K-means", "ARI por reamostragem"] > comparacao_alg.loc["Hierárquico (Ward)", "ARI por reamostragem"] + 0.2),
+    ("Modelo congelado e modelo do ano 2 concordam (ARI acima de 0,85)", ari_estrutura, ari_estrutura > 0.85),
+    ("Participação muda menos de 4 p.p. entre dezembro de 2010 e de 2011", participacao["diferença (p.p.)"].abs().max(),
+     participacao["diferença (p.p.)"].abs().max() < 4),
+    ("Abstenção no ano 2 abaixo de 2%", 100 * (dist2 > LIMIAR).mean(), (dist2 > LIMIAR).mean() < 0.02),
+    ("Recompra de A supera a de E em mais de 50 p.p.", resultado_futuro.loc["A", "recompra (%)"] - resultado_futuro.loc["E", "recompra (%)"],
+     resultado_futuro.loc["A", "recompra (%)"] - resultado_futuro.loc["E", "recompra (%)"] > 50),
+    ("Segmento C tem o maior atrito no ano 2", atrito_ano2.max(), atrito_ano2.idxmax() == "C"),
+    ("K-means com 3 variáveis fica a menos de 0,03 da curva ABC em recompra e valor",
+     max(abs(k3v["recompra"] - abc["recompra"]), abs(k3v["valor futuro (log)"] - abc["valor futuro (log)"])),
+     max(abs(k3v["recompra"] - abc["recompra"]), abs(k3v["valor futuro (log)"] - abc["valor futuro (log)"])) < 0.03),
+    ("A proposta fica abaixo da curva ABC em recompra e em valor", proposta["valor futuro (log)"] - abc["valor futuro (log)"],
+     proposta["recompra"] < abc["recompra"] and proposta["valor futuro (log)"] < abc["valor futuro (log)"]),
+    ("A proposta separa o atrito ao menos 2 vezes melhor que a curva ABC e que o RF", proposta["atrito futuro"] / max(abc["atrito futuro"], rf["atrito futuro"]),
+     proposta["atrito futuro"] > 2 * max(abc["atrito futuro"], rf["atrito futuro"])),
+    ("A régua informada iguala a proposta em atrito (diferença menor que 0,01)", informada["atrito futuro"] - proposta["atrito futuro"],
+     abs(informada["atrito futuro"] - proposta["atrito futuro"]) < 0.01),
+    ("A régua informada supera a proposta em recompra e em valor", informada["valor futuro (log)"] - proposta["valor futuro (log)"],
+     informada["recompra"] > proposta["recompra"] and informada["valor futuro (log)"] > proposta["valor futuro (log)"]),
+    ("Participação sazonal: alguma janela intermediária varia mais de 5 p.p.", variacao_sazonal.iloc[1:-1].max(), variacao_sazonal.iloc[1:-1].max() > 5),
+    ("Custo do K-means cresce com expoente abaixo de 1,3", expoente["K-means"], expoente["K-means"] < 1.3),
+    ("Custo do hierárquico cresce com expoente acima de 1,7", expoente["Hierárquico (Ward)"], expoente["Hierárquico (Ward)"] > 1.7),
+]
+conferencia_df = pd.DataFrame(conferencia, columns=["afirmação", "valor nesta execução", "confere"])
+conferencia_df["confere"] = conferencia_df["confere"].map({True: "sim", False: "NÃO"})
+display(conferencia_df.round(3))
+print(f"{(conferencia_df['confere'] == 'sim').sum()} de {len(conferencia_df)} afirmações conferem nesta execução.")
+
+#%% md
+## Referências
+
+**Material da disciplina**
+
+{{REFERENCIA_DISCIPLINA}}
+
+**Dados**
+
+* Chen, D. (2012). *Online Retail II* [conjunto de dados]. UCI Machine Learning Repository. https://doi.org/10.24432/C5CG6D. Licença CC BY 4.0.
+* Chen, D., Sain, S. L., & Guo, K. (2012). Data mining for the online retail industry: A case study of RFM model-based customer segmentation using data mining. *Journal of Database Marketing & Customer Strategy Management*, 19(3), 197–208.
+
+**Métodos**
+
+* MacQueen, J. (1967). Some methods for classification and analysis of multivariate observations. *Proceedings of the 5th Berkeley Symposium on Mathematical Statistics and Probability*, 1, 281–297.
+* Arthur, D., & Vassilvitskii, S. (2007). k-means++: The advantages of careful seeding. *Proceedings of the 18th ACM-SIAM Symposium on Discrete Algorithms*, 1027–1035.
+* Sculley, D. (2010). Web-scale k-means clustering. *Proceedings of the 19th International Conference on World Wide Web*, 1177–1178.
+* Rousseeuw, P. J. (1987). Silhouettes: A graphical aid to the interpretation and validation of cluster analysis. *Journal of Computational and Applied Mathematics*, 20, 53–65.
+* Davies, D. L., & Bouldin, D. W. (1979). A cluster separation measure. *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 1(2), 224–227.
+* Hubert, L., & Arabie, P. (1985). Comparing partitions. *Journal of Classification*, 2(1), 193–218.
+* Pedregosa, F., et al. (2011). Scikit-learn: Machine learning in Python. *Journal of Machine Learning Research*, 12, 2825–2830.
+* Documentação do scikit-learn: [agrupamento](https://scikit-learn.org/stable/modules/clustering.html) e [avaliação de agrupamento](https://scikit-learn.org/stable/modules/clustering.html#clustering-performance-evaluation).
+
+**Regulação**
+
+* Brasil. Lei nº 13.709, de 14 de agosto de 2018. Lei Geral de Proteção de Dados Pessoais (LGPD).
+
+## Glossário
+
+| Termo | Significado neste trabalho |
+|---|---|
+| **Segmento** | grupo de clientes com comportamento parecido nas quatro variáveis |
+| **Centroide** | ponto central de um segmento; serve de perfil de referência |
+| **Recência** | dias desde a última compra, contados até o fim da janela |
+| **Ticket médio** | valor médio por pedido de compra |
+| **Estorno** | fatura de cancelamento ou devolução (a base não distingue os dois) |
+| **Custo de servir** | esforço de suporte e logística que um cliente gera; aproximado aqui pelos estornos por pedido |
+| **Estornos por pedido** | faturas de estorno divididas pelos pedidos de compra na janela, com limite em 1 |
+| **Janela** | período de 12 meses usado para resumir o comportamento |
+| **Inércia** | soma das distâncias quadráticas de cada cliente ao centro do seu segmento |
+| **Silhouette** | medida de coesão e separação dos grupos, de −1 a 1 |
+| **ARI** | índice de Rand ajustado: concordância entre duas partições; 1 = idênticas, perto de 0 = acaso |
+| **Reamostragem** | sortear clientes com reposição para simular outra amostra da mesma base |
+| **Abstenção** | recusa do modelo em classificar um cliente distante de todos os perfis |
+| **Curva ABC** | divisão dos clientes em faixas de valor |
+| **RFM e RF** | recência, frequência e valor monetário: régua tradicional de segmentação. A versão RF usa só as duas primeiras |
+| **Régua informada** | três faixas de valor cruzadas com "teve estorno": a régua simples que recebe a mesma informação do modelo |
+| **Coorte** | os clientes do ano 1, acompanhados no ano 2 |

@@ -1,0 +1,158 @@
+#%% md
+---
+# 2. Motivação e Justificativa da Arquitetura
+
+## 2.1 O que o problema exige do modelo
+
+Antes de olhar para algoritmos, listamos o que a {{EMPRESA}} precisa. A arquitetura é avaliada por esta lista.
+
+| # | Requisito | De onde vem |
+|---|---|---|
+| R1 | **Aprender sem rótulo** | não existe o segmento correto de cada cliente |
+| R2 | **Escalar** | base grande, 12 países, reprocessamento frequente |
+| R3 | **Ser legível** | suporte, logística e marketing precisam entender o perfil sem um cientista de dados ao lado |
+| R4 | **Classificar um cliente novo de forma barata** | o resultado é consultado em fila de atendimento e em campanha |
+| R5 | **Recalibrar sem reescrever regras** | o comportamento muda e os limiares manuais por país não acompanham |
+| R6 | **Ser estável** | uma segmentação que muda a cada execução não serve de base para política |
+
+## 2.2 Qual das arquiteturas estudadas serve
+
+A disciplina cobriu seis famílias de modelos. Cada uma responde a um tipo de pergunta.
+
+| Arquitetura | Aula | Pergunta que responde | Serve para este problema? |
+|---|---|---|---|
+| Regressão linear | 1 | quanto? (valor numérico, com rótulo) | Não. Não há um número-alvo a prever. Pode vir depois, para prever o valor de cada segmento. |
+| KNN | 2 | qual classe? (com rótulo) | Não. Exige rótulos de segmento que não existem e guarda a base inteira para cada consulta. |
+| **K-means** | 3 | **quais se parecem?** | **Sim.** É a pergunta do desafio. |
+| Apriori | 3 | o que aparece junto? | Complementar. Descreve produtos em cestas, não clientes. É um próximo passo dentro de cada segmento. |
+| Séries temporais | 4 | quanto, no futuro? | Não. Prevê uma série, não agrupa clientes. Pode prever o tamanho de cada segmento. |
+| Q-learning | 4 | qual ação tomar? | Não agora. Exigiria um simulador de clientes e uma recompensa. É candidato para escolher a ação por segmento. |
+
+Só o K-means atende ao requisito R1 e agrupa clientes. A escolha dentro da disciplina está feita; resta saber se ele é a melhor escolha entre os métodos de agrupamento, o que as próximas subseções examinam.
+
+## 2.3 K-means em uma página
+
+**O que ele faz.** Recebe cada cliente como um ponto em um espaço de variáveis numéricas e procura *k* centros (centroides) que minimizem a soma das distâncias quadráticas de cada ponto ao seu centro:
+
+$$J = \sum_{i=1}^{n}\lVert x_i - \mu_{c_i}\rVert^2$$
+
+**Como ele faz.** Quatro passos, vistos na Aula 3:
+
+1. inicializa *k* centroides;
+2. atribui cada cliente ao centroide mais próximo;
+3. recalcula cada centroide como a média dos seus clientes;
+4. repete 2 e 3 até os centroides pararem de se mover.
+
+**O que nós escolhemos.** As variáveis, a escala delas e o número de grupos *k*. O algoritmo sempre devolve *k* grupos, existam eles nos dados ou não. Por isso as Seções 3.6 a 3.8 justificam cada uma dessas três escolhas.
+
+**O que ele supõe.** Grupos compactos, de tamanho parecido, em torno de um centro. É sensível à escala, à assimetria e a valores extremos, porque tudo isso distorce a distância.
+
+**Por que essas propriedades interessam aqui.**
+
+| Propriedade | Requisito atendido |
+|---|---|
+| Custo de treino proporcional a n × k × d por iteração (clientes × grupos × variáveis) | R2 |
+| O centroide **é** o perfil do segmento, nas mesmas variáveis de negócio | R3 |
+| Classificar um cliente novo custa *k* distâncias, sem consultar a base | R4 |
+| Retreinar recalcula os centros a partir dos dados, sem limiar manual | R5 |
+
+O requisito R6 (estabilidade) não é garantido pelo algoritmo. É medido na Seção 3.
+
+## 2.4 As alternativas
+
+Comparamos o K-means com a prática tradicional e com três algoritmos de agrupamento que aparecem na figura da Aula 3 ("os resultados variam segundo o modelo escolhido").
+
+| Alternativa | Como agrupa | Ponto forte | Onde falha para a {{EMPRESA}} |
+|---|---|---|---|
+| **Régua manual** (curva ABC, RFM por faixas) | limiares definidos por pessoas, variável a variável | simples e transparente | a grade cresce exponencialmente: 5 faixas em 4 variáveis são 625 células. Os limiares precisam ser mantidos à mão, por país. É o tipo de método tradicional que o enunciado diz ter deixado de escalar (R2, R5). |
+| **Hierárquico (Ward)** | funde, passo a passo, os dois grupos mais próximos | não exige *k* de início; dendrograma | guarda as distâncias entre todos os pares: memória proporcional a n² (R2). Não tem regra nativa para cliente novo (R4). |
+| **DBSCAN** | regiões densas separadas por regiões vazias | formas arbitrárias; identifica ruído | depende de dois parâmetros, e o resultado muda muito com eles (R6). Parte dos clientes fica sem grupo, como ruído. Sem regra para cliente novo (R4). |
+| **GMM** | mistura de distribuições gaussianas | grupos alongados; pertinência em probabilidade | mais parâmetros por grupo, mais difícil de explicar (R3). Variáveis com muitos zeros degeneram o ajuste. |
+| **K-means** | centroide mais próximo | escala linear; centroide é o perfil; classifica cliente novo | supõe grupos compactos; *k* é escolha nossa; exige preparo da escala |
+
+A tabela é o argumento conceitual. As duas evidências empíricas vêm a seguir: o custo de cada alternativa quando a base cresce (2.5) e a qualidade de cada uma nos dados da prova de conceito (3.10).
+
+## 2.5 Evidência: quanto custa cada alternativa quando a base cresce
+
+O muro da {{EMPRESA}} é de escala. Medimos o tempo de treino de cada algoritmo em bases sintéticas de tamanho crescente, com o mesmo formato do problema real: quatro variáveis e cinco grupos. Até 100 mil clientes, cada ponto é o menor tempo de três execuções; acima disso, uma execução.
+
+O algoritmo hierárquico é medido só até 20 mil clientes: acima disso, a memória necessária deixa de caber em uma execução de demonstração, o que já é parte do resultado. O DBSCAN é medido até 100 mil, apenas para manter a demonstração curta.
+
+#%% code
+def base_sintetica(n):
+    X, _ = make_blobs(n_samples=n, n_features=4, centers=5, cluster_std=1.6, random_state=SEED)
+    return X
+
+CANDIDATOS = {  # nome: (construtor, maior base medida)
+    "K-means": (lambda: KMeans(n_clusters=5, n_init=1, random_state=SEED), 1_000_000),
+    "GMM": (lambda: GaussianMixture(n_components=5, n_init=1, random_state=SEED), 1_000_000),
+    "DBSCAN": (lambda: DBSCAN(eps=0.5, min_samples=20), 100_000),
+    "Hierárquico (Ward)": (lambda: AgglomerativeClustering(n_clusters=5, linkage="ward"), 20_000),
+}
+TAMANHOS = [2_000, 5_000, 10_000, 20_000, 50_000, 100_000, 300_000, 1_000_000]
+
+KMeans(n_clusters=5, n_init=1, random_state=SEED).fit(base_sintetica(2_000))  # aquecimento, fora da medição
+medidas = []
+for n in TAMANHOS:
+    X_sint = base_sintetica(n)
+    for nome, (construir, maior_base) in CANDIDATOS.items():
+        if n > maior_base:
+            continue
+        tempos = []
+        for _ in range(3 if n <= 100_000 else 1):
+            t0 = time.perf_counter()
+            construir().fit(X_sint)
+            tempos.append(time.perf_counter() - t0)
+        medidas.append({"algoritmo": nome, "clientes": n, "segundos": min(tempos)})
+escala = pd.DataFrame(medidas)
+tabela_escala = escala.pivot(index="clientes", columns="algoritmo", values="segundos")[list(CANDIDATOS)]
+display(tabela_escala.round(3))
+
+#%% md
+Em escala logarítmica nos dois eixos, a inclinação de cada linha é o expoente de crescimento: inclinação 1 significa que dobrar a base dobra o tempo; inclinação 2, que dobrar a base quadruplica o tempo.
+
+#%% code
+N_HIPOTESE = 20_000_000   # hipótese de trabalho: o enunciado não informa o tamanho da base de clientes
+
+fig, ax = plt.subplots(figsize=(8.6, 4.6))
+resumo_escala = []
+for cor, nome in zip(CORES, CANDIDATOS):
+    g = escala[escala["algoritmo"] == nome]
+    ax.plot(g["clientes"], g["segundos"], marker="o", ms=5, color=cor, label=nome)
+    ajuste = g[g["clientes"] >= 5_000]
+    expoente, intercepto = np.polyfit(np.log(ajuste["clientes"]), np.log(ajuste["segundos"]), 1)
+    resumo_escala.append({"algoritmo": nome, "expoente de crescimento": expoente,
+                          "maior base medida": int(g["clientes"].max()),
+                          "tempo nessa base (s)": g["segundos"].iloc[-1],
+                          f"extrapolação para {N_HIPOTESE / 1e6:.0f} milhões (h)":
+                              np.exp(intercepto) * N_HIPOTESE ** expoente / 3600})
+for nome in CANDIDATOS:                          # rótulo direto no fim de cada linha
+    g = escala[escala["algoritmo"] == nome]
+    ax.annotate(nome, (g["clientes"].iloc[-1], g["segundos"].iloc[-1]), xytext=(7, -3),
+                textcoords="offset points", color=TINTA, fontsize=9)
+ax.set_xscale("log"); ax.set_yscale("log")
+ax.set_xlabel("Clientes na base (escala log)"); ax.set_ylabel("Tempo de treino em segundos (escala log)")
+ax.set_title("Tempo de treino por tamanho da base")
+ax.set_xlim(right=4.5e6)
+ax.legend(loc="upper left", fontsize=9)
+plt.tight_layout(); plt.show()
+
+resumo_escala = pd.DataFrame(resumo_escala).set_index("algoritmo")
+display(resumo_escala.round(2))
+gb_ward = N_HIPOTESE * (N_HIPOTESE - 1) / 2 * 8 / 1e12
+print(f"Memória para as distâncias entre todos os pares de {N_HIPOTESE / 1e6:.0f} milhões de clientes: {gb_ward:,.0f} TB".replace(",", " "))
+
+#%% md
+**Evidência.** O hierárquico cresce com expoente próximo de 2: de 10 mil para 20 mil clientes o tempo quadruplica. Extrapolado para 20 milhões de clientes, seriam milhares de horas e uma matriz de distâncias de cerca de 1.600 TB. O K-means cresce com expoente próximo de 1 (0,8 nesta execução) e treina um milhão de clientes em uma fração de segundo por inicialização. Para bases que não cabem na memória existe a variante em lotes (`MiniBatchKMeans`), que lê os clientes aos poucos e chega a centros muito próximos.
+
+**Cuidado.** O teste elimina o hierárquico, não o GMM nem o DBSCAN, que também escalam bem em quatro variáveis. Esses dois são decididos pela qualidade do resultado nos dados reais, na Seção 3.10. O número de 20 milhões é uma hipótese de trabalho: o enunciado não informa o tamanho da base. Os tempos dependem da máquina; o que se transfere é o expoente.
+
+## 2.6 Decisão
+
+**Decisão.** Adotar o **K-means** como arquitetura da solução.
+
+* É a arquitetura estudada que responde à pergunta do desafio (2.2).
+* Atende aos requisitos de escala, legibilidade, consulta barata e recalibração (2.3). O hierárquico falha em escala (2.5). A vantagem sobre a régua manual é um argumento estrutural (2.4); a Seção 3.10 testa se ela aparece nos dados da prova de conceito.
+* A estabilidade (R6) e a vantagem sobre GMM e DBSCAN ainda precisam ser demonstradas com dados reais. Isso é feito na Seção 3.10, e o resultado é reportado mesmo onde não favorece o K-means.
+
+**Resumo da Seção 2.** O problema não tem rótulo e é de escala. O K-means é a única arquitetura da disciplina que agrupa clientes, tem custo linear e devolve perfis legíveis. A régua manual é o tipo de método que o enunciado diz ter deixado de escalar; o hierárquico não cabe na memória; GMM, DBSCAN e a própria régua são avaliados com dados na Seção 3.10.

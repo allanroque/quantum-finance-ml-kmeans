@@ -1,0 +1,44 @@
+#%% md
+# {{EMPRESA}} — Machine Learning
+## Segmentação de clientes por valor e custo de servir com K-means
+
+{{CAPA_IDENTIFICACAO}}
+
+---
+
+## Resumo
+
+A {{EMPRESA}} cresceu até o ponto em que tratar todos os clientes da mesma forma custa caro e tratar cada um individualmente é impossível. Este trabalho propõe **segmentar a base de clientes com K-means**, usando quatro variáveis de comportamento que cobrem duas dimensões: quanto o cliente vale e quanto custa atendê-lo.
+
+A proposta é sustentada por uma prova de conceito com dados reais de e-commerce: 1,07 milhão de linhas de pedido em dois anos, com clientes de 41 países depois da limpeza. Os resultados principais:
+
+* **Cinco segmentos** de tamanho parecido (19% a 21% dos clientes cada), descritos em variáveis que as áreas de negócio leem sem tradução.
+* **Estáveis:** reamostrando os clientes e reajustando o modelo, a partição se mantém (ARI médio acima de 0,96).
+* **Persistentes no tempo:** o modelo treinado no ano 1 e aplicado aos clientes do ano 2 produz quase a mesma partição que um modelo treinado do zero no ano 2 (ARI de 0,88).
+* **Informativos sobre o futuro:** o segmento de maior valor tem 19% dos clientes e 63% da receita, e 93% dele volta a comprar no ano seguinte; no segmento inativo, 36%.
+* **Além da curva ABC:** entre os clientes do quintil de maior valor, um em cada quatro está em um segmento de risco ou de atrito que a curva ABC não distingue.
+* **Dois resultados que limitam a proposta e que não escondemos.** Uma régua simples que receba a mesma informação (faixas de valor cruzadas com "teve estorno") separa o futuro tão bem quanto o modelo: o que pesa é a informação, não o algoritmo. A vantagem do K-means é estrutural (mais dimensões sem multiplicar regras, recalibração por mercado, custo linear) e ainda precisa ser confirmada com os dados da empresa. E a participação dos segmentos oscila ao longo do ano, por causa da sazonalidade das compras, o que muda a forma de monitorar o modelo.
+
+## Como este documento está organizado
+
+Os quatro tópicos pedidos no enunciado são as quatro seções numeradas, na mesma ordem.
+
+| Tópico do enunciado | Seção | O que há nela |
+|---|---|---|
+| 1. Introdução e Problemática | **1** | o desafio escolhido, por que importa, o que conta como sucesso |
+| 2. Motivação e Justificativa da Arquitetura | **2** | requisitos, comparação com alternativas, teste de escala |
+| 3. Proposta de Solução | **3** | arquitetura, dados, pipeline de treinamento, avaliação, consumo |
+| 4. Considerações e Potencial de Impacto | **4** | limitações, riscos, cenários de valor, roteiro |
+
+Todo o código está executado e as saídas estão salvas: é possível ler do início ao fim sem rodar nada. Para reproduzir, execute as células em ordem no Google Colab; a primeira execução baixa a base (45 MB) e leva alguns minutos.
+
+No texto, os números seguem a convenção brasileira (vírgula decimal). Nas saídas do código, a do Python: ponto decimal e espaço como separador de milhar.
+
+**Legenda**
+
+| Marcador | Significado |
+|---|---|
+| **Decisão** | escolha de projeto e a razão dela |
+| **Evidência** | resultado da execução que sustenta uma afirmação |
+| **Cuidado** | limite, armadilha ou erro comum |
+| **Resumo** | o que levar da seção |

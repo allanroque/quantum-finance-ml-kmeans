@@ -1,0 +1,69 @@
+#%% md
+---
+# 1. Introdução e Problemática
+
+## 1.1 O contexto: o muro da escalabilidade operacional
+
+A {{EMPRESA}} é uma operação nativa digital de varejo omnicanal, presente em **12 países**, com um catálogo de mais de **5 milhões de SKUs**. O crescimento levou a empresa ao que ela chama internamente de *muro da escalabilidade operacional*: manter a qualidade do suporte, a eficiência logística e a personalização de marketing por métodos tradicionais ficou inviável.
+
+A diretoria pediu uma operação orientada por inteligência, em que modelos apoiam decisões de negócio. O enunciado oferece três desafios: scoring de produtos, detecção de anomalias e fraudes, e segmentação de clientes.
+
+> O enunciado descreve a operação de varejo com o nome Quantum Commerce. Adotamos o nome do trabalho, {{EMPRESA}}, para a mesma empresa.
+
+## 1.2 O desafio escolhido: segmentação de clientes
+
+Escolhemos o terceiro desafio: **construir um modelo de agrupamento que segmente os clientes por perfil de consumo**.
+
+A razão é que as três dores citadas no enunciado têm a mesma origem: suporte, logística e marketing precisam decidir como tratar cada cliente. O enunciado diz que os "métodos tradicionais" deixaram de funcionar na escala atual. A nossa leitura é que, sem um modelo, as áreas ficam entre dois extremos: a mesma regra para todos, ou regras escritas à mão por país e por área, que não acompanham o crescimento. Uma segmentação única, mantida por modelo, dá às três áreas a mesma resposta para a pergunta "com que tipo de cliente estou falando?".
+
+| Área | Com métodos tradicionais (nossa leitura) | O que o segmento permite |
+|---|---|---|
+| **Suporte** | fila única e o mesmo nível de serviço para todos | priorizar e rotear por perfil; antecipar o volume de contatos gerado por estornos |
+| **Logística** | a mesma política de frete e de devolução para todos | calibrar a política por perfil de atrito; planejar a logística reversa |
+| **Marketing** | campanha única, ou regras manuais por país | cinco abordagens em vez de uma ou de milhões; reativar onde há chance real |
+
+### O recorte: valor × custo de servir
+
+Segmentações de clientes costumam olhar só para o lado da receita: quem compra mais, com que frequência, há quanto tempo. Para a {{EMPRESA}} isso cobre o marketing e deixa de fora as outras duas dores.
+
+Por isso a proposta inclui uma segunda dimensão: o **custo de servir**, medido aqui pelo comportamento de **estorno** (cancelamentos e devoluções). Cada estorno consome um contato de suporte e um ciclo de logística reversa. Dois clientes com a mesma receita podem ter custos muito diferentes para a operação, e tratá-los da mesma forma é parte do muro.
+
+## 1.3 O que conta como sucesso
+
+Agrupamento não tem resposta certa para conferir. Para não escolher um resultado pelo gosto, fixamos cinco critérios e mostramos, ao longo das Seções 2 e 3, a evidência de cada um.
+
+| # | Critério | Como medimos | Onde |
+|---|---|---|---|
+| C1 | **Estável** | a partição se mantém ao mudar a inicialização e ao reamostrar os clientes (ARI) | 3.8, 3.10 |
+| C2 | **Persistente no tempo** | o modelo treinado em um ano continua descrevendo os clientes do ano seguinte | 3.10 |
+| C3 | **Informativo** | segmentos formados no passado diferem em recompra, valor e atrito no futuro; comparamos com o acaso e com as réguas tradicionais | 3.10 |
+| C4 | **Acionável** | poucos segmentos, nenhum minúsculo, cada um pedindo um tratamento diferente | 3.8, 3.9, 3.11 |
+| C5 | **Escalável** | o custo de treinar cresce em linha com a base; classificar um cliente novo é barato | 2.5, 3.11 |
+
+## 1.4 O problema em termos de Machine Learning
+
+| Elemento | Definição |
+|---|---|
+| **Unidade de análise** | um cliente (não uma linha de pedido) |
+| **Entrada** | o comportamento do cliente nos últimos 12 meses, resumido em quatro variáveis |
+| **Saída** | o segmento do cliente e a distância dele ao perfil típico do segmento |
+| **Rótulo** | não existe: ninguém sabe de antemão qual é o "segmento correto" de cada cliente |
+| **Tipo de aprendizagem** | não supervisionada, agrupamento (Aula 3) |
+
+A falta de rótulo define a família de modelos. Se a pergunta fosse "quanto este cliente vai gastar?", seria regressão (Aula 1). Se fosse "este cliente vai cancelar?", seria classificação (Aula 2). A pergunta aqui é "quais clientes se parecem?", e ela não tem gabarito.
+
+## 1.5 Ponto de partida: o que a Aula 3 deixou em aberto
+
+Na Aula 3 a turma segmentou clientes de uma loja online com K-means em dois eixos. Aquele notebook terminou apontando o que faltava para sair do exercício e chegar a uma aplicação. Este trabalho parte dali e trata cada ponto em aberto.
+
+| Na Aula 3 | Neste trabalho |
+|---|---|
+| um ano de dados, só Reino Unido | dois anos da mesma loja e 41 países |
+| duas variáveis: frequência e ticket médio | quatro: recência, frequência, ticket médio e estornos por pedido |
+| cancelamentos excluídos da análise | estornos viram a variável de custo de servir |
+| estabilidade conferida trocando a semente | também por reamostragem dos clientes |
+| "para implantação, também precisamos de validação futura e monitoramento" | o ano 2 valida o modelo do ano 1; sinais de monitoramento calculados |
+| comparar K-means com uma alternativa: extensão opcional | comparação com Ward, GMM e DBSCAN, mais um teste de escala |
+| consultar um cliente novo e abster-se: discutido | função de consulta com abstenção calibrada e testada |
+
+**Resumo da Seção 1.** O desafio é segmentar clientes. O recorte é valor × custo de servir, para servir às três áreas citadas no enunciado. Sucesso significa segmentos estáveis, persistentes, informativos, acionáveis e baratos de manter em escala.

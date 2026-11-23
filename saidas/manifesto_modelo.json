@@ -1,0 +1,70 @@
+{
+  "versao": "kmeans-k5-v1",
+  "algoritmo": "KMeans",
+  "k": 5,
+  "n_init": 20,
+  "semente": 42,
+  "variaveis": [
+    "recencia",
+    "frequencia",
+    "ticket_medio",
+    "estornos_por_pedido"
+  ],
+  "transformacoes": {
+    "recencia": "log1p",
+    "frequencia": "log",
+    "ticket_medio": "log",
+    "estornos_por_pedido": "raiz quadrada"
+  },
+  "janela_de_treino": [
+    "2009-12-01",
+    "2010-12-01"
+  ],
+  "clientes_no_treino": 4239,
+  "limiar_de_abstencao": 3.0256,
+  "ari_reamostragem": 0.9649,
+  "centros_em_unidades_de_negocio": {
+    "A": {
+      "recencia": 8.645,
+      "frequencia": 9.401,
+      "ticket_medio": 357.883,
+      "estornos_por_pedido": 0.229
+    },
+    "B": {
+      "recencia": 12.901,
+      "frequencia": 2.762,
+      "ticket_medio": 244.04,
+      "estornos_por_pedido": 0.0
+    },
+    "C": {
+      "recencia": 69.496,
+      "frequencia": 2.425,
+      "ticket_medio": 349.313,
+      "estornos_por_pedido": 0.614
+    },
+    "D": {
+      "recencia": 91.118,
+      "frequencia": 1.498,
+      "ticket_medio": 467.269,
+      "estornos_por_pedido": 0.0
+    },
+    "E": {
+      "recencia": 134.124,
+      "frequencia": 1.362,
+      "ticket_medio": 121.097,
+      "estornos_por_pedido": 0.0
+    }
+  },
+  "dados": {
+    "dataset": "UCI Online Retail II (id 502)",
+    "url": "https://archive.ics.uci.edu/static/public/502/online+retail+ii.zip",
+    "bytes": 45622418,
+    "sha256": "572e36277c2390fbfde10664750731e0a86f55e33470d91919085f0408e67bfb",
+    "confere_com_a_referencia": true
+  },
+  "bibliotecas": {
+    "numpy": "2.1.3",
+    "pandas": "2.2.3",
+    "scikit-learn": "1.6.1"
+  }
+}

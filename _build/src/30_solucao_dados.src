@@ -1,0 +1,297 @@
+#%% md
+---
+# 3. Proposta de Solução
+
+## 3.1 Arquitetura da solução
+
+A solução é um pipeline em lote. Uma vez por ciclo (mensal, na proposta), ele resume o comportamento de cada cliente em quatro variáveis, aplica o modelo e publica uma tabela de segmentos que as três áreas consultam. O modelo em si é retreinado uma vez por ano, ou antes, se o monitoramento indicar que a estrutura mudou.
+
+#%% code
+def caixa(ax, x, y, largura, altura, titulo, linhas, destaque=False):
+    ax.add_patch(FancyBboxPatch((x, y), largura, altura, boxstyle="round,pad=0.02,rounding_size=0.10",
+                                fc="#e9f1fc" if destaque else "#ffffff", ec=AZUL if destaque else TINTA_2, lw=1.3))
+    ax.text(x + largura / 2, y + altura - 0.16, titulo, ha="center", va="top", fontsize=9.5,
+            fontweight="bold", color=TINTA)
+    ax.text(x + largura / 2, y + altura - 0.50, "\n".join(linhas), ha="center", va="top", fontsize=8.3,
+            color=TINTA_2, linespacing=1.4)
+
+def seta(ax, origem, destino, rotulo=None, desloc=(0, 0.12)):
+    ax.annotate("", xy=destino, xytext=origem,
+                arrowprops=dict(arrowstyle="-|>", color=TINTA_2, lw=1.3, shrinkA=3, shrinkB=3))
+    if rotulo:
+        ax.text((origem[0] + destino[0]) / 2 + desloc[0], (origem[1] + destino[1]) / 2 + desloc[1], rotulo,
+                ha="center", va="bottom", fontsize=8, color=TINTA_2, style="italic")
+
+fig, ax = plt.subplots(figsize=(12.4, 5.6))
+ax.set_xlim(0, 12.4); ax.set_ylim(0, 5.6); ax.axis("off")
+L, A, Y1 = 2.1, 1.75, 3.45                      # largura e altura das caixas; base da linha de cima
+xs = [0.15, 2.60, 5.05, 7.50, 9.95]
+caixa(ax, xs[0], Y1, L, A, "1. Fontes", ["pedidos e itens", "estornos", "cadastro do cliente", "atendimento*"])
+caixa(ax, xs[1], Y1, L, A, "2. Variáveis por cliente", ["janela de 12 meses:", "recência, frequência,", "ticket médio,", "estornos por pedido"])
+caixa(ax, xs[2], Y1, L, A, "3. Preparo", ["log e raiz para", "reduzir assimetria;", "padronização", "das escalas"])
+caixa(ax, xs[3], Y1, L, A, "4. K-means (k = 5)", ["atribui cada cliente", "ao centroide", "mais próximo"], destaque=True)
+caixa(ax, xs[4], Y1, L, A, "5. Tabela de segmentos", ["cliente, segmento,", "distância ao centro,", "abstenção, versão"])
+for a, b in zip(xs[:-1], xs[1:]):
+    seta(ax, (a + L, Y1 + A / 2), (b, Y1 + A / 2))
+
+Y2, A2 = 0.95, 1.35                             # linha de baixo: quem consome e quem vigia
+caixa(ax, xs[2], Y2, L, A2, "Marketing e CRM", ["campanha e oferta", "por segmento"])
+caixa(ax, xs[3], Y2, L, A2, "Suporte", ["prioridade e", "roteamento da fila"])
+caixa(ax, xs[4], Y2, L, A2, "Logística", ["política de frete", "e de devolução"])
+caixa(ax, xs[0], Y2, 2 * L + 0.35, A2, "Monitoramento e retreino",
+      ["participação por segmento · distância aos centros · abstenção", "retreino quando a estrutura muda"])
+
+Y_BARRA = 2.85                                  # barra de distribuição da tabela de segmentos
+x_saida = xs[4] + L / 2
+ax.plot([x_saida, x_saida], [Y1, Y_BARRA], color=TINTA_2, lw=1.3)
+ax.plot([xs[0] + L + 0.18, x_saida], [Y_BARRA, Y_BARRA], color=TINTA_2, lw=1.3)
+for x in [xs[0] + L + 0.18, xs[2] + L / 2, xs[3] + L / 2, xs[4] + L / 2]:
+    seta(ax, (x, Y_BARRA), (x, Y2 + A2))
+seta(ax, (xs[0] + 0.55, Y2 + A2), (xs[0] + 0.55, Y1), rotulo="próximo ciclo", desloc=(0.62, -0.12))
+ax.text(0.15, 0.42, "* Fonte prevista para a operação da empresa; não existe na base da prova de conceito.",
+        fontsize=8, color=TINTA_2)
+ax.set_title("Arquitetura proposta: do pedido à decisão por segmento", pad=4)
+plt.tight_layout(); plt.show()
+
+#%% md
+## 3.2 Dados necessários
+
+A tabela separa o que a solução precisa na operação da {{EMPRESA}} do que estava disponível para a prova de conceito. A coluna da empresa lista o que se espera encontrar em uma operação de varejo desse porte; confirmar a existência e a qualidade dessas fontes é a primeira fase do roteiro (Seção 4.4).
+
+| Dado | Na {{EMPRESA}} (previsto) | Na prova de conceito |
+|---|---|---|
+| **Pedidos e itens** | histórico transacional dos 12 países | 1,07 milhão de linhas de item de pedido, de dezembro de 2009 a dezembro de 2011 |
+| **Estornos** | cancelamentos e devoluções, com motivo e etapa | faturas com prefixo `C`; a base não distingue cancelamento de devolução |
+| **Cliente** | identificador único entre canais, país, data de cadastro | identificador e país; sem data de cadastro |
+| **Atendimento** | contatos por cliente e motivo | não disponível |
+| **Custos** | frete, logística reversa, custo por contato | não disponível; tratado por cenários na Seção 4.3 |
+
+**A base da prova de conceito.** [Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii) (UCI Machine Learning Repository, licença CC BY 4.0): transações reais de um varejista online britânico de presentes, com clientes em dezenas de países e participação de atacadistas. É a mesma loja da Aula 3, agora com dois anos de histórico em vez de um. O segundo ano é o que permite validar o modelo no futuro.
+
+| Coluna original | Nome usado aqui | Significado |
+|---|---|---|
+| `Invoice` | `pedido` | número da fatura; prefixo `C` indica estorno |
+| `StockCode`, `Description` | `sku`, `descricao` | código e descrição do produto |
+| `Quantity`, `Price` | `quantidade`, `preco` | unidades e preço unitário em libras |
+| `InvoiceDate` | `data` | data e hora da fatura |
+| `Customer ID` | `cliente` | identificador do cliente, quando informado |
+| `Country` | `pais` | país do cliente |
+
+**Cuidado.** São dados históricos de uma loja, de 2009 a 2011. Servem para demonstrar o método e medir se ele se sustenta. Os números não descrevem a {{EMPRESA}}.
+
+## 3.3 Carga e limpeza auditada
+
+A célula abaixo procura a base em `data/`. Se não encontra, baixa o arquivo do repositório da UCI, confere a integridade e guarda uma cópia local. O manifesto registra tamanho e SHA-256, para que qualquer pessoa saiba se está usando a mesma cópia.
+
+#%% code
+URL_UCI = "https://archive.ics.uci.edu/static/public/502/online+retail+ii.zip"
+SHA256_REFERENCIA = "572e36277c2390fbfde10664750731e0a86f55e33470d91919085f0408e67bfb"
+PASTA_DADOS = Path("data")
+PASTA_DADOS.mkdir(exist_ok=True)
+ARQ_ZIP, ARQ_CACHE = PASTA_DADOS / "online_retail_ii.zip", PASTA_DADOS / "online_retail_ii.pkl"
+
+def zip_integro(caminho):
+    try:
+        with zipfile.ZipFile(caminho) as z:
+            return z.testzip() is None
+    except (zipfile.BadZipFile, FileNotFoundError):
+        return False
+
+def baixar(url, destino, tentativas=4):
+    parcial = destino.with_suffix(".parcial")
+    for i in range(1, tentativas + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=180) as resposta, open(parcial, "wb") as saida:
+                shutil.copyfileobj(resposta, saida, length=1 << 20)
+            if zip_integro(parcial):
+                parcial.replace(destino)
+                return
+            print(f"Tentativa {i}: arquivo incompleto, baixando de novo.")
+        except Exception as erro:
+            print(f"Tentativa {i} falhou: {erro}")
+        time.sleep(3 * i)
+    raise RuntimeError("Não foi possível baixar a base. Baixe o zip em "
+                       "https://archive.ics.uci.edu/dataset/502/online+retail+ii e salve como " + str(destino))
+
+def carregar_bruto():
+    if ARQ_CACHE.exists():
+        return pd.read_pickle(ARQ_CACHE)
+    if not zip_integro(ARQ_ZIP):
+        print("Baixando a base da UCI (45 MB)...")
+        baixar(URL_UCI, ARQ_ZIP)
+    with zipfile.ZipFile(ARQ_ZIP) as z:
+        planilha = next(n for n in z.namelist() if n.lower().endswith(".xlsx"))
+        print("Lendo o Excel (cerca de um minuto)...")
+        abas = pd.read_excel(io.BytesIO(z.read(planilha)), sheet_name=None,
+                             dtype={"Invoice": "string", "StockCode": "string", "Customer ID": "string"})
+    bruto = pd.concat([df.assign(aba=nome) for nome, df in sorted(abas.items())], ignore_index=True)
+    bruto.to_pickle(ARQ_CACHE)
+    return bruto
+
+bruto = carregar_bruto()
+manifesto = {"dataset": "UCI Online Retail II (id 502)", "url": URL_UCI}
+if ARQ_ZIP.exists():
+    manifesto.update(bytes=ARQ_ZIP.stat().st_size, sha256=hashlib.sha256(ARQ_ZIP.read_bytes()).hexdigest())
+    manifesto["confere_com_a_referencia"] = manifesto["sha256"] == SHA256_REFERENCIA
+print(json.dumps(manifesto, indent=2, ensure_ascii=False))
+def milhar(x):
+    """Inteiro com espaço como separador de milhar."""
+    return f"{x:,.0f}".replace(",", " ")
+
+print(f"\nLinhas: {milhar(len(bruto))} · período: {bruto['InvoiceDate'].min():%d/%m/%Y} a {bruto['InvoiceDate'].max():%d/%m/%Y}"
+      f" · países: {bruto['Country'].nunique()} · abas: {sorted(bruto['aba'].unique())}")
+display(bruto.head(3))
+
+#%% md
+**Uma linha é um item de um pedido**, não um cliente. Antes de agregar por cliente, definimos quais linhas entram. Cada filtro é aplicado em sequência e registrado, para que a perda de cada etapa fique visível.
+
+| Filtro | Por quê |
+|---|---|
+| Sobreposição entre as abas | a planilha tem uma aba por ano e os primeiros dias de dezembro de 2010 aparecem nas duas; sem o filtro, esses pedidos contariam em dobro |
+| Cliente identificado | sem identificador não há como agregar por cliente |
+| Código de mercadoria | códigos como `POST`, `M` ou `BANK CHARGES` são frete, ajustes e taxas, não produtos. A regra (cinco dígitos e letras opcionais) é uma heurística |
+| Preço positivo | preço zero ou negativo indica brinde, ajuste ou erro de registro |
+| Sinal coerente | compra com quantidade positiva; estorno com quantidade negativa |
+
+#%% code
+auditoria = []
+
+def filtrar(df, condicao, etapa):
+    resultado = df.loc[condicao].copy()
+    auditoria.append({"etapa": etapa, "antes": len(df), "removidas": len(df) - len(resultado), "depois": len(resultado)})
+    return resultado
+
+t = bruto.rename(columns={"Invoice": "pedido", "StockCode": "sku", "Description": "descricao", "Quantity": "quantidade",
+                          "InvoiceDate": "data", "Price": "preco", "Customer ID": "cliente", "Country": "pais"})
+t["pedido"] = t["pedido"].str.strip().str.upper()
+t["sku"] = t["sku"].str.strip().str.upper()
+t["cliente"] = t["cliente"].str.replace(r"\.0$", "", regex=True)
+t["estorno"] = t["pedido"].str.startswith("C")
+
+aba_1, aba_2 = sorted(t["aba"].unique())
+inicio_aba_2 = t.loc[t["aba"] == aba_2, "data"].min()
+t = filtrar(t, ~((t["aba"] == aba_1) & (t["data"] >= inicio_aba_2)), "Sobreposição entre as abas")
+
+mercadoria = t["sku"].str.fullmatch(r"\d{5}[A-Z]*", na=False)
+compra_valida = mercadoria & (t["preco"] > 0) & ~t["estorno"] & (t["quantidade"] > 0)
+sem_id = t["cliente"].isna()
+valor_linha = t["quantidade"] * t["preco"]
+print(f"Compras sem cliente identificado: {sem_id[compra_valida].mean():.1%} das linhas e "
+      f"{valor_linha[compra_valida & sem_id].sum() / valor_linha[compra_valida].sum():.1%} do valor.")
+
+t = filtrar(t, t["cliente"].notna(), "Cliente identificado")
+t = filtrar(t, t["sku"].str.fullmatch(r"\d{5}[A-Z]*", na=False), "Código de mercadoria (heurística)")
+t = filtrar(t, t["preco"] > 0, "Preço positivo")
+t = filtrar(t, (t["estorno"] & (t["quantidade"] < 0)) | (~t["estorno"] & (t["quantidade"] > 0)), "Sinal coerente com o tipo")
+t["valor"] = t["quantidade"] * t["preco"]
+
+auditoria_df = pd.DataFrame(auditoria)
+auditoria_df["% do total original"] = (100 * auditoria_df["removidas"] / len(bruto)).round(1)
+display(auditoria_df)
+repetidas = t.duplicated(subset=["pedido", "sku", "descricao", "quantidade", "data", "preco", "cliente"]).sum()
+print(f"Linhas elegíveis: {milhar(len(t))} · clientes: {milhar(t['cliente'].nunique())} · países: {t['pais'].nunique()}"
+      f" · pedidos de compra: {milhar(t.loc[~t['estorno'], 'pedido'].nunique())} · faturas de estorno: {milhar(t.loc[t['estorno'], 'pedido'].nunique())}")
+print(f"Linhas idênticas a outra do mesmo pedido (mantidas): {milhar(repetidas)}, ou {repetidas / len(t):.1%} das linhas elegíveis")
+
+#%% md
+**Decisão.** Linhas idênticas dentro do mesmo pedido não foram removidas. Podem ser duas leituras legítimas do mesmo produto, e a base não permite distinguir. Elas são 1,4% das linhas elegíveis.
+
+**Cuidado.** O filtro de cliente identificado é o que mais remove: 22% das linhas de compra e 13% do valor não têm identificador. Na {{EMPRESA}}, compras sem login ficam fora da segmentação por cliente e precisam de outro tratamento (por sessão ou por dispositivo). É uma limitação que a Seção 4.1 retoma.
+
+## 3.4 Desenho temporal: observar um ano, validar no seguinte
+
+Os dois anos da base são divididos em duas janelas de 12 meses. A primeira serve para construir o modelo; a segunda, só para validá-lo. Doze meses cobrem um ciclo sazonal inteiro, como a próxima seção mostra.
+
+#%% code
+import matplotlib.dates as mdates
+
+INICIO_OBS, FIM_OBS = pd.Timestamp("2009-12-01"), pd.Timestamp("2010-12-01")
+INICIO_FUT, FIM_FUT = FIM_OBS, pd.Timestamp("2011-12-01")
+JANELAS = [("Janela de observação (ano 1)", "variáveis, escolha de k e treino do K-means", INICIO_OBS, FIM_OBS, "#cde2fb"),
+           ("Janela futura (ano 2)", "validação: não entra no treino nem na escolha de variáveis e de k", INICIO_FUT, FIM_FUT, "#f9d7c7")]
+
+fig, ax = plt.subplots(figsize=(10.5, 1.7))
+for titulo, descricao, a, b, cor in JANELAS:
+    x0, x1 = mdates.date2num(a), mdates.date2num(b)
+    ax.barh(0, x1 - x0 - 3, left=x0 + 1.5, height=0.9, color=cor)
+    ax.text((x0 + x1) / 2, 0.13, titulo, ha="center", va="center", fontweight="bold", fontsize=10, color=TINTA)
+    ax.text((x0 + x1) / 2, -0.2, descricao, ha="center", va="center", fontsize=8.5, color=TINTA_2)
+ax.set_xticks([mdates.date2num(d) for d in (INICIO_OBS, FIM_OBS, FIM_FUT)], ["dez/2009", "dez/2010", "dez/2011"])
+ax.set_yticks([]); ax.grid(False); ax.spines["left"].set_visible(False); ax.set_ylim(-0.55, 0.55)
+plt.tight_layout(); plt.show()
+
+for titulo, _, a, b, _ in JANELAS:
+    w = t[(t["data"] >= a) & (t["data"] < b)]
+    print(f"{titulo}: {a:%d/%m/%Y} a {b:%d/%m/%Y} (exclusive) · {milhar(len(w))} linhas · "
+          f"{milhar(w.loc[~w['estorno'], 'cliente'].nunique())} clientes com compra")
+
+#%% md
+* Neste notebook, a escolha de variáveis, de transformações e do valor de *k* usa **somente medidas calculadas no ano 1**.
+* O ano 2 entra na Seção 3.10, com o modelo já congelado, para responder a duas perguntas: os segmentos continuam existindo? E eles dizem algo sobre o que o cliente fez depois?
+* A única vez em que o ano 2 aparece antes disso é no gráfico de vendas por mês da próxima seção, que mostra os dois anos para deixar o ciclo sazonal visível.
+* Os nove dias de dezembro de 2011 ficam de fora, para comparar janelas de mesmo tamanho.
+
+**Cuidado.** É a mesma regra da Aula 4 para séries temporais: o futuro não pode vazar para o treino. Em agrupamento o vazamento é mais sutil, porque não há rótulo. Ele acontece quando se escolhe *k* ou as variáveis olhando para o resultado que se quer validar. A Seção 4.1 registra até onde essa separação foi garantida neste trabalho.
+
+## 3.5 Um olhar na operação antes de modelar
+
+Dois fatos orientam o desenho das variáveis: como as vendas variam ao longo do ano e como a receita e os estornos se concentram em poucos clientes. O primeiro gráfico mostra os dois anos; a análise de concentração usa só o ano 1.
+
+#%% code
+compras, estornos = t[~t["estorno"]], t[t["estorno"]]
+mensal = compras.set_index("data")["valor"].resample("MS").sum().to_frame("compras")
+mensal = mensal[mensal.index < FIM_FUT]                 # dezembro de 2011 tem só 9 dias
+
+fig, ax = plt.subplots(figsize=(10, 3.3))
+ax.bar(mensal.index, mensal["compras"] / 1e3, width=26, align="edge", color=AZUL)
+topo = mensal["compras"].max() / 1e3
+ax.set_ylim(0, topo * 1.17)
+ax.axvline(FIM_OBS - pd.Timedelta(days=2), color=TINTA_2, lw=1, ls="--")
+ax.text(FIM_OBS + pd.Timedelta(days=5), topo * 1.08, "ano 2", fontsize=9, color=TINTA_2)
+ax.text(FIM_OBS - pd.Timedelta(days=9), topo * 1.08, "ano 1", fontsize=9, color=TINTA_2, ha="right")
+ax.set_ylabel("Compras (mil £)"); ax.grid(axis="x", visible=False)
+ax.set_title("Compras por mês: o pico de outubro e novembro se repete")
+plt.tight_layout(); plt.show()
+
+#%% code
+no_ano1 = (t["data"] >= INICIO_OBS) & (t["data"] < FIM_OBS)
+receita_cliente = compras[no_ano1].groupby("cliente")["valor"].sum().sort_values(ascending=False)
+estorno_cliente = (-estornos[no_ano1].groupby("cliente")["valor"].sum()).reindex(receita_cliente.index).fillna(0).sort_values(ascending=False)
+
+def curva_concentracao(valores):
+    v = np.sort(valores.values)[::-1]
+    return np.arange(1, len(v) + 1) / len(v), np.cumsum(v) / v.sum()
+
+def fatia_do_topo(valores, fracao):
+    v = np.sort(valores.values)[::-1]
+    return v[: max(1, int(len(v) * fracao))].sum() / v.sum()
+
+fig, ax = plt.subplots(figsize=(7.6, 4.4))
+for serie, cor, nome, desloc in [(receita_cliente, AZUL, "Receita de compras", (10, -14)), (estorno_cliente, LARANJA, "Valor estornado", (10, -14))]:
+    x, y = curva_concentracao(serie)
+    ax.plot(100 * x, 100 * y, color=cor, label=nome)
+    ax.scatter([10], [100 * fatia_do_topo(serie, 0.10)], color=cor, s=40, zorder=3, edgecolor=FUNDO, linewidth=2)
+    ax.annotate(f"10% dos clientes → {fatia_do_topo(serie, 0.10):.0%}", (10, 100 * fatia_do_topo(serie, 0.10)),
+                xytext=desloc, textcoords="offset points", fontsize=9, color=TINTA)
+ax.plot([0, 100], [0, 100], color=CINZA, lw=1, ls="--", label="Distribuição igual")
+ax.set_xlabel("Clientes do ano 1, do maior para o menor (% acumulada)"); ax.set_ylabel("Valor (% acumulada)")
+ax.set_title("Poucos clientes concentram a receita, e menos ainda concentram os estornos")
+ax.legend(loc="lower right", fontsize=9)
+plt.tight_layout(); plt.show()
+
+concentracao = pd.DataFrame({nome: {"1% do topo": fatia_do_topo(s, 0.01), "10% do topo": fatia_do_topo(s, 0.10),
+                                    "20% do topo": fatia_do_topo(s, 0.20)}
+                             for nome, s in [("receita de compras", receita_cliente), ("valor estornado", estorno_cliente)]})
+display((100 * concentracao).round(1))
+print(f"No ano 1: clientes com ao menos um estorno: {(estorno_cliente > 0).mean():.1%} · "
+      f"valor estornado sobre a receita de compras: {estorno_cliente.sum() / receita_cliente.sum():.1%}")
+
+#%% md
+**Evidência.**
+
+* As vendas têm um pico em outubro e novembro que se repete. Uma janela de observação menor que 12 meses confundiria o cliente sazonal com o cliente inativo.
+* A receita é concentrada: os 10% maiores clientes do ano 1 respondem por cerca de 59% dela.
+* Os estornos são mais concentrados ainda: 10% dos clientes respondem por cerca de 86% do valor estornado, e 1% deles por mais da metade.
+* Cerca de 38% dos clientes tiveram ao menos um estorno no ano. O estorno não é um evento raro.
+
+**Decisão.** Usar janelas de **12 meses**, para cobrir um ciclo sazonal inteiro. E medir o estorno pela **frequência com que acontece**, não pelo valor: o custo de servir vem de cada ocorrência (um contato, um ciclo de logística reversa), e o valor é dominado por poucos clientes. A Seção 3.8 confirma essa escolha com um teste de sensibilidade.

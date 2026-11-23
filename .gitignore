@@ -1,0 +1,17 @@
+# dados baixados e cópias locais (o notebook baixa a base da UCI)
+data/
+*.pkl
+*.parcial
+
+# modelo serializado: depende da versão das bibliotecas; o notebook o regenera
+*.joblib
+
+# ambiente e arquivos temporários
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+
+# pacote de entrega gerado localmente
+*.zip
