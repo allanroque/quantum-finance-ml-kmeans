@@ -8,6 +8,27 @@ Trabalho final de uma disciplina de Machine Learning em nível de pós-graduaç�
 
 Uma proposta de aplicação de K-means para segmentar a base de clientes de uma operação de varejo omnicanal presente em 12 países, sustentada por uma prova de conceito com dados reais de e-commerce. O recorte é **valor × custo de servir**: além de quanto o cliente compra, o modelo considera com que frequência ele gera estornos (cancelamentos e devoluções), para que a mesma segmentação sirva a marketing, suporte e logística.
 
+## A estratégia e o porquê de cada escolha
+
+| Escolha | Por quê |
+|---|---|
+| **Segmentar clientes** (o terceiro desafio do enunciado) | suporte, logística e marketing precisam da mesma resposta: com que tipo de cliente estou lidando? Uma única segmentação serve às três áreas |
+| **Usar K-means** | o problema não tem rótulo, e o K-means é a arquitetura da disciplina que agrupa clientes; o custo de treino cresce de forma aproximadamente linear com a base; o centro de cada grupo já é o perfil que as áreas leem |
+| **Incluir os estornos**, além de recência, frequência e ticket | dois clientes com a mesma receita podem custar muito diferente para atender; sem essa variável, a segmentação só serviria ao marketing |
+| **Treinar em um ano e validar no seguinte** | agrupamento não tem gabarito; o ano seguinte mostra se os segmentos persistem e se dizem algo sobre o que o cliente fez depois |
+
+A justificativa completa está na Seção 2 do notebook, e o registro de todas as decisões, em [`docs/Racional_e_Decisoes.pdf`](docs/Racional_e_Decisoes.pdf).
+
+## Principais resultados da prova de conceito
+
+* **Cinco segmentos** de tamanho parecido (19% a 21% dos clientes cada), descritos por recência, frequência, ticket médio e estornos por pedido.
+* **Estáveis:** ARI acima de 0,96 ao reamostrar os clientes e reajustar o modelo.
+* **Persistentes:** o modelo treinado no ano 1 e um modelo treinado do zero no ano 2 concordam em 0,88 de ARI.
+* **Informativos:** a recompra no ano seguinte vai de 93% no segmento de maior valor a 36% no inativo.
+* **Além da curva ABC:** um em cada quatro clientes da faixa de maior valor está em um segmento de risco ou de atrito que a curva ABC não distingue.
+
+Dois resultados limitam a proposta e estão reportados no notebook. Uma régua simples que receba a mesma informação (faixas de valor cruzadas com "teve estorno") separa o futuro tão bem quanto o modelo: o que pesa é a informação, não o algoritmo, e a vantagem do K-means em dimensões e em mercados ainda precisa ser confirmada com os dados da empresa. E a participação dos segmentos oscila ao longo do ano, por causa da sazonalidade das compras, o que exige uma referência sazonal no monitoramento.
+
 ## Por onde começar
 
 | Se você quer | Abra |
@@ -26,16 +47,6 @@ O notebook já está executado, com todas as saídas salvas.
 | 2. Motivação e Justificativa da Arquitetura | Seção 2 (argumento e teste de escala) e Seção 3.10 (b) (comparação com dados reais) |
 | 3. Proposta de Solução | Seção 3: arquitetura (3.1), dados (3.2 a 3.5), pipeline de treinamento (3.6 a 3.9), avaliação (3.10), consumo (3.11 e 3.12) |
 | 4. Considerações e Potencial de Impacto | Seção 4: limitações (4.1), riscos (4.2), valor (4.3), roteiro (4.4) |
-
-## Principais resultados da prova de conceito
-
-* **Cinco segmentos** de tamanho parecido (19% a 21% dos clientes cada), descritos por recência, frequência, ticket médio e estornos por pedido.
-* **Estáveis:** ARI acima de 0,96 ao reamostrar os clientes e reajustar o modelo.
-* **Persistentes:** o modelo treinado no ano 1 e um modelo treinado do zero no ano 2 concordam em 0,88 de ARI.
-* **Informativos:** a recompra no ano seguinte vai de 93% no segmento de maior valor a 36% no inativo.
-* **Além da curva ABC:** um em cada quatro clientes da faixa de maior valor está em um segmento de risco ou de atrito que a curva ABC não distingue.
-
-Dois resultados limitam a proposta e estão reportados no notebook. Uma régua simples que receba a mesma informação (faixas de valor cruzadas com "teve estorno") separa o futuro tão bem quanto o modelo: o que pesa é a informação, não o algoritmo, e a vantagem do K-means em dimensões e em mercados ainda precisa ser confirmada com os dados da empresa. E a participação dos segmentos oscila ao longo do ano, por causa da sazonalidade das compras, o que exige uma referência sazonal no monitoramento.
 
 ## Estrutura do repositório
 

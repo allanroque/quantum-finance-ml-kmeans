@@ -10,6 +10,19 @@
 
 A {{EMPRESA}} cresceu até o ponto em que tratar todos os clientes da mesma forma custa caro e tratar cada um individualmente é impossível. Este trabalho propõe **segmentar a base de clientes com K-means**, usando quatro variáveis de comportamento que cobrem duas dimensões: quanto o cliente vale e quanto custa atendê-lo.
 
+**A estratégia e o porquê de cada escolha**
+
+| Escolha | Por quê |
+|---|---|
+| **Segmentar clientes** (o terceiro desafio do enunciado) | suporte, logística e marketing precisam da mesma resposta: com que tipo de cliente estou lidando? Uma única segmentação serve às três áreas |
+| **Usar K-means** | o problema não tem rótulo, e o K-means é a arquitetura da disciplina que agrupa clientes; o custo de treino cresce de forma aproximadamente linear com a base; o centro de cada grupo já é o perfil que as áreas leem |
+| **Incluir os estornos**, além de recência, frequência e ticket | dois clientes com a mesma receita podem custar muito diferente para atender; sem essa variável, a segmentação só serviria ao marketing |
+| **Treinar em um ano e validar no seguinte** | agrupamento não tem gabarito; o ano seguinte mostra se os segmentos persistem e se dizem algo sobre o que o cliente fez depois |
+
+A justificativa completa está na Seção 2, e a comparação com as alternativas, nas Seções 2.5 e 3.10.
+
+**Onde chegamos**
+
 A proposta é sustentada por uma prova de conceito com dados reais de e-commerce: 1,07 milhão de linhas de pedido em dois anos, com clientes de 41 países depois da limpeza. Os resultados principais:
 
 * **Cinco segmentos** de tamanho parecido (19% a 21% dos clientes cada), descritos em variáveis que as áreas de negócio leem sem tradução.
